@@ -1,0 +1,54 @@
+{
+  "name": "opencode-trim",
+  "version": "0.6.0",
+  "description": "Silent, conservative OpenCode V2 tool-output compression and cache-aware context pruning",
+  "type": "module",
+  "private": true,
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./core": "./src/compress.js",
+    "./prune": "./src/prune.js",
+    "./pressure": "./src/pressure.js",
+    "./rpc": "./src/stats-rpc.js",
+    "./tui": "./src/tui.tsx"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.3.0",
+    "@opentui/core": ">=0.8.4",
+    "@opentui/solid": ">=0.8.4",
+    "solid-js": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": { "optional": true },
+    "@opentui/core": { "optional": true },
+    "@opentui/solid": { "optional": true },
+    "solid-js": { "optional": true }
+  },
+  "files": [
+    "index.js",
+    "src/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "AUDIT.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check.mjs && npm test",
+    "bench": "node bench/bench.mjs",
+    "pack:dry": "npm pack --dry-run --json --ignore-scripts"
+  },
+  "engines": {
+    "node": "^26.0.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "v2",
+    "context",
+    "pruning",
+    "shell",
+    "compression"
+  ]
+}
