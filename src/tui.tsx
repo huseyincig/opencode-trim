@@ -3,7 +3,7 @@
 // Read-only view of the server stats RPC; never touches server internals.
 import { Plugin } from "@opencode/plugin/tui"
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
-import { TRIM_STATS_RPC } from "./stats-rpc.js"
+import { TRIM_STATS_RPC } from "./stats-rpc.ts"
 import {
   buildCollapsedRows,
   buildHeader,
@@ -14,7 +14,7 @@ import {
   normalizeEventSessionID,
   STORAGE_KEY,
   TRIM_VERSION,
-} from "./tui-model.js"
+} from "./tui-model.ts"
 
 const DEBOUNCE_MS = 150
 const POLL_MS = 2000

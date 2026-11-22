@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0 — 2026-11-22
+
+- **Full Strict TypeScript Migration & `dist/` Build (`tsconfig.json`, `src/**/*.ts`, `scripts/emit-tui.ts`, `dist/`)**:
+  - Migrated all source modules, command families, benchmarks, validation scripts, and all 28 test suites (`500 / 500` tests) to strict TypeScript (`"strict": true`, `tsc --noEmit`), emitting compiled ESM `.js` + `.d.ts` declarations and adaptive Solid Universal TUI bundles (`dist/tui-runtime.js`, `dist/tui-standalone.js`, `dist/tui.js`).
+  - Synced canonical TypeScript Universal Mesh Bridge (`src/bridge.ts`, `BRIDGE_REVISION: 2.3.1`).
+- **Smart Context Window Cap, Provider Token Calibration & Compaction Boundary Reset (`src/config.ts`, `src/pressure.ts`, `src/cache.ts`, `src/plugin.ts`)**:
+  - Added `contextWindowCap` (`min(catalog, cap)`) to cap 1M+ model context windows without losing `contextWindow` as an unknown-model fallback.
+  - Calibrated `estimateRequest()` ratio using provider-reported assistant token usage (`input + output + cache.read + cache.write`) plus trailing unmeasured turn tokens.
+  - Added `ContextCache.resetSession(sessionID)` triggered on `session.compaction.ended` and `session.deleted`.
+- **Structural Noise Cleaners, RAM LRU Memoization, Pressure-Adaptive Compression & `ToolDedupeRing` (`src/compress.ts`, `src/plugin.ts`)**:
+  - Added `scrubBlobs` (data URI/base64/hex elision), `filterDebugLogs`, `collapseStackTraces`, `collapseTablePadding`, and `collapseRepetitionLoops` (single-char & multi-line block loops) to the shell compression pipeline.
+  - Added bounded RAM LRU memoization (`128` entries / `512 KB`) to `compressOutput()`, reducing median per-family compression latency to **0.04–0.20 ms**.
+  - Added pressure-adaptive `effectiveToolOptions()`, `compactReadEnvelope()` relative path shortening for `read`, `ToolDedupeRing` (`dedupeWindow`, invalidated on edits/compaction), `pruneEditDiagnostics()` (`pruneUnrelatedDiagnostics`) for `edit`/`write`/`apply_patch`, and zero-LLM `SessionWorkingState` tracking (`activeFiles` & `openErrors`).
+- **Advanced Context Pruning & Lossless Retrievable Vault (`src/prune.ts`, `src/memory-store.ts`, `src/memory.ts`)**:
+  - Added `purgeErrorInputs` (blanks oversized inputs on old failed discrete and combined V2 `type: "tool"` calls while keeping error outputs intact), `pruneHistoricalReasoning` (omits old `reasoning`/`thinking` traces outside the protected tail), `prunePreviewLines` (`buildPreviewNotice` idempotent head/tail previews), and `scorePruningCandidate`.
+  - Added secret-redacted `vault` table (`maxVaultRows: 500`, multilingual & nested `pwd`/`PIN` redaction) to `memory.db`, `recoverableNotice`/`expiredNotice` markers with prompt-injection boundary text, and `trim_expand` tool + structured Code Mode `output` JSON schemas on both `trim_expand` and `trim_history_search`.
+- **Verification**: **`500 / 500`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked, `npm run bench` and `npm run pack:dry` (`147` files) passing.
+
 ## 0.6.0 — 2026-11-20
 
 - **Universal OpenCode V2 Plugin Mesh Interoperability (`src/bridge.js` v2.3.0, `src/plugin.js`, `src/prune.js`, `src/cache.js`)**:

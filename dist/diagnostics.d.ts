@@ -1,0 +1,13 @@
+export declare const MAX_LINE: number;
+export declare const FAILURE: RegExp;
+export declare const WARNING: RegExp;
+export declare const CODE: RegExp;
+export declare const ANCHOR: RegExp;
+export declare const STACK: RegExp;
+export declare const SUMMARY: RegExp;
+export declare function isDiagnosticLine(line: unknown): boolean;
+export declare function isImportantLine(line: unknown): boolean;
+export declare function hasFailureText(text: unknown): boolean;
+export declare function hasSummaryText(text: unknown): boolean;
+export declare function isExitNotice(text: unknown): boolean;
+export declare function parseExitCode(text: unknown): number | null;
