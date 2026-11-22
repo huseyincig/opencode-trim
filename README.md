@@ -18,7 +18,7 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 
 ## 📊 Verification & Live Acceptance
 
-> OpenCode Trim **v0.7.0** was verified on **22 November 2026** against **OpenCode V2 (`>=2.3.0`)** on Node **26.13.1** and Bun **1.4.4**.
+> OpenCode Trim **v0.7.1** was verified on **22 November 2026** against **OpenCode V2 (`>=2.3.0`)** on Node **26.13.1** and Bun **1.4.4**.
 
 - **Current Automated Verification:** **500 / 500** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, recoverable vault, and TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
 - **Deterministic Compression & Pruning Benchmark (`npm run bench`):**
@@ -27,7 +27,7 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 - **Packed Tarball & Dual-Runtime Verification:** `npm pack` `.tgz` artifact verified in isolated Node **26.13.1** and Bun **1.4.4** sandboxes across `.`, `./tui`, `./rpc`, `./core`, `./prune`, and `./pressure` entrypoints.
 - **Live OpenCode V2 Host Acceptance:** Verified plugin load, `tool.execute.after` shell compression, `session.context` pruning, real-provider compression/pruning (`opencode-go/deepseek-v4.1-flash` and `opencode-go/beam-free`), SQLite FTS5 compaction archiving & `trim_history_search`, multi-location fail-closed isolation, and TUI sidebar rendering across 80–200 column widths.
 
-Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.7.0 release notes](CHANGELOG.md) for the latest changes.
+Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.7.1 release notes](CHANGELOG.md) for the latest changes.
 
 ---
 
@@ -49,7 +49,7 @@ Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for repr
 
 ## 📦 Installation
 
-The current version is **0.7.0** (OpenCode **V2 `>=2.3.0`**, Node.js **`^26.0.0`**).
+The current version is **0.7.1** (OpenCode **V2 `>=2.3.0`**, Node.js **`^26.0.0`**).
 
 OpenCode Trim supports **Global**, **Project-Local**, **`.opencode/plugins/` Local Wrapper / Symlink**, **Local Development (`file://`)**, and **Remote TUI Client (`cli.json`)** installation modes.
 
@@ -76,7 +76,7 @@ Or pin an exact version and configure optional features (such as the TUI sidebar
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     [
-      "opencode-trim@0.7.0",
+      "opencode-trim@0.7.1",
       {
         "enabled": true,
         "shell": true,
@@ -298,13 +298,13 @@ Because OpenCode V2 auto-discovers `./tui` from `package.json`, the sidebar uses
 ### 🔽 Collapsed View (Default)
 
 ```text
-▶ Trim                     v0.7.0
+▶ Trim                     v0.7.1
 Context              74% (740k/1M)
 Savings           -106k | 12 drops
 Memory                 4 summaries
 ```
 
-- **Header:** Clickable disclosure header (`▶ Trim` / `▼ Trim`), current version (`v0.7.0`), and status marker (`!` when stale, `?` before first snapshot).
+- **Header:** Clickable disclosure header (`▶ Trim` / `▼ Trim`), current version (`v0.7.1`), and status marker (`!` when stale, `?` before first snapshot).
 - **Context:** Host-native token usage (`input + cache.read` from the last assistant turn after any completed compaction) over the model catalog limit, falling back to Trim's `~`-prefixed estimate only when native usage is unavailable.
 - **Savings:** Total characters saved across shell compression, list filtering, and context pruning (`Idle` when zero).
 - **Memory:** Displayed in collapsed view only when the optional FTS5 memory store is active or reporting an error.
@@ -314,7 +314,7 @@ Memory                 4 summaries
 Clicking the `▶ Trim` header expands the full operational breakdown:
 
 ```text
-▼ Trim                     v0.7.0
+▼ Trim                     v0.7.1
 Context
 74%                      740k/1M
 Optimization

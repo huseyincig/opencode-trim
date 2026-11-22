@@ -154,7 +154,7 @@ function totalSaved(snap) {
         }
     return any ? sum : null;
 }
-export const TRIM_VERSION = "0.7.0";
+export const TRIM_VERSION = "0.7.1";
 export const SECTION_TITLES = { context: "Context", optimization: "Optimization", compaction: "Compaction", memory: "Memory" };
 // Flat row model. Each row: key, section, kind (stat|warn), label, value, tone, line (compat).
 export function buildRows(raw, now = Date.now(), options = {}) {

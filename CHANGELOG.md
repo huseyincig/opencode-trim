@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.1 — 2026-11-22
+
+- **Node.js 26 `node_modules` Package Exports Fix (`package.json`, `test/tui-package.test.ts`)**:
+  - Updated `package.json` `exports` (`.`, `./core`, `./prune`, `./pressure`, `./rpc`, `./tui`) to target compiled `./dist/*.js` entrypoints and `./dist/*.d.ts` type declarations instead of raw `.ts`/`.tsx` sources, resolving `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING` when imported from `node_modules` under Node.js 26.
+  - Enabled public package publishing by removing `"private": true` from `package.json`.
+- **Live OpenCode V2 Host Acceptance & Verification**:
+  - Verified against isolated **OpenCode V2 (`v2.3.2`)** host (`opencode plugin list`, `opencode serve`, live sessions, `trim_expand` / `trim_history_search`, `agentDenylist`, foreign-directory isolation, malformed config fail-safe, and Node `26.13.1` + Bun `1.4.5` package exports).
+  - **`500 / 500`** tests passing (`npm run check`), `tsc --noEmit` clean, `94 / 94` files syntax-checked.
+
 ## 0.7.0 — 2026-11-22
 
 - **Full Strict TypeScript Migration & `dist/` Build (`tsconfig.json`, `src/**/*.ts`, `scripts/emit-tui.ts`, `dist/`)**:
