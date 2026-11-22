@@ -946,3 +946,155 @@ test('Step 11e: redactSecrets redacts structured nested pwd objects and estimate
   const est = estimateRequest(event, new Map(), parseOptions());
   assert.ok(est.estimatedTokens >= 2000, `expected reasoning_content counted in estimatedTokens, got ${est.estimatedTokens}`);
 });
+
+// ============================================================================
+// Step 12: Vault Ref Discovery (listVault), Safe Regex/Case Grep & History Filters
+// ============================================================================
+
+test('Step 12a: listVault discovers cached refs with tool/target/limit filters and reports totalVaultRows', () => {
+  const d = mkdtempSync(join(tmpdir(), 'trim-vault-list-'));
+  const dbPath = join(d, 'm.db');
+  const store = openMemoryStore({ dbPath, project: '/proj/disc', maxVaultRows: 10 }) as any;
+
+  const empty = store.listVault({ project: '/proj/disc' });
+  assert.equal(empty.found, false);
+  assert.equal(empty.mode, 'list');
+  assert.equal(empty.totalVaultRows, 0);
+  assert.deepEqual(empty.refs, []);
+  assert.match(empty.text, /No cached pruned tool outputs found/);
+
+  store.saveVault({ project: '/proj/disc', session_id: 's1', ref_id: 'trm_a1', tool: 'read', target: 'src/models.config.json', text: 'line1\nline2', created_at: 1000 });
+  store.saveVault({ project: '/proj/disc', session_id: 's1', ref_id: 'trm_a2', tool: 'shell', target: 'npm test', text: 'pass1\npass2\npass3', created_at: 2000 });
+  store.saveVault({ project: '/proj/disc', session_id: 's2', ref_id: 'trm_a3', tool: 'read', target: 'src/plugin.ts', text: 'code', created_at: 3000 });
+  store.saveVault({ project: '/proj/other', session_id: 's9', ref_id: 'trm_other', tool: 'read', target: 'secret.ts', text: 'other', created_at: 4000 });
+
+  const all = store.listVault({ project: '/proj/disc' });
+  assert.equal(all.found, true);
+  assert.equal(all.totalVaultRows, 3);
+  assert.deepEqual(all.refs.map((r: any) => r.id), ['trm_a3', 'trm_a2', 'trm_a1']);
+  assert.match(all.text, /showing=3 total=3\/10/);
+  assert.match(all.text, /trm_a1.*models\.config\.json/);
+
+  const readOnly = store.listVault({ project: '/proj/disc', tool: 'READ', target: 'models' });
+  assert.equal(readOnly.refs.length, 1);
+  assert.equal(readOnly.refs[0].id, 'trm_a1');
+
+  const limited = store.listVault({ project: '/proj/disc', limit: 2 });
+  assert.equal(limited.refs.length, 2);
+  assert.equal(limited.totalVaultRows, 3);
+
+  store.close();
+  rmSync(d, { recursive: true });
+});
+
+test('Step 12b: getVault supports caseSensitive, bounded regex grep, ReDoS rejection, and 12000 default maxChars', () => {
+  const d = mkdtempSync(join(tmpdir(), 'trim-vault-regex-'));
+  const dbPath = join(d, 'm.db');
+  const store = openMemoryStore({ dbPath, project: '/proj/rx' }) as any;
+
+  const bigBody = [
+    'TIER_REASONING = "high"',
+    'tier_reasoning = "low"',
+    'blockedGlobs: ["*.pem", "*.key"]',
+    'normal_line = 1',
+    'x'.repeat(15000),
+  ].join('\n');
+  store.saveVault({ project: '/proj/rx', ref_id: 'trm_rx1', tool: 'read', target: 'cfg.json', text: bigBody });
+
+  // Default maxChars is 12000
+  const full = store.getVault({ project: '/proj/rx', ref_id: 'trm_rx1' });
+  assert.equal(full.truncated, true);
+  assert.match(full.text, /TRUNCATED at 12000/);
+
+  // Case-sensitive substring grep
+  const cs = store.getVault({ project: '/proj/rx', ref_id: 'trm_rx1', grep: 'TIER_REASONING', caseSensitive: true });
+  assert.equal(cs.matchedLines, 1);
+  assert.match(cs.text, /1: TIER_REASONING = "high"/);
+
+  // Bounded regex grep
+  const rx = store.getVault({ project: '/proj/rx', ref_id: 'trm_rx1', grep: 'blockedGlobs:\\s*\\[', regex: true });
+  assert.equal(rx.matchedLines, 1);
+  assert.match(rx.text, /3: blockedGlobs:/);
+
+  // Unsafe ReDoS or invalid regex rejected
+  assert.throws(() => store.getVault({ project: '/proj/rx', ref_id: 'trm_rx1', grep: '(a+)+$', regex: true }), /invalid or unsafe grep regex/);
+  assert.throws(() => store.getVault({ project: '/proj/rx', ref_id: 'trm_rx1', grep: '[unclosed', regex: true }), /invalid or unsafe grep regex/);
+
+  store.close();
+  rmSync(d, { recursive: true });
+});
+
+test('Step 12c: trim_expand discovery mode & trim_history_search sessionID/days/limit/fullSection filters', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'trim-tools-v2-'));
+  const dbPath = join(d, 'm.db');
+  const tools = new Map<string, any>();
+  const ctx = {
+    options: { memory: { enabled: true, dbPath } },
+    location: { directory: '/proj/t2' },
+    tool: {
+      hook: async () => ({ dispose: async () => {} }),
+      transform: async (fn: any) => {
+        fn({ add: (t: any) => tools.set(t.name, t) });
+        return { dispose: async () => {} };
+      },
+    },
+    session: {
+      hook: async () => ({ dispose: async () => {} }),
+      context: async () => ({ messages: [] }),
+    },
+    event: {
+      subscribe: async () => (async function* () {})(),
+    },
+  };
+
+  const stop = await setupMemory(ctx, parseOptions(ctx.options));
+  const expandTool = tools.get(EXPAND_TOOL_NAME);
+  const searchTool = tools.get('trim_history_search');
+
+  const now = Date.now();
+  const DAY = 86_400_000;
+  const store = openMemoryStore({ dbPath, project: '/proj/t2' });
+  store.saveVault({ project: '/proj/t2', ref_id: 'trm_v100', tool: 'read', target: 'src/config.ts', text: 'export const PORT = 8080;\nexport const HOST = "127.0.0.1";' });
+  store.archive({
+    event_id: 'e-old',
+    project: '/proj/t2',
+    session_id: 'ses_old',
+    created_at: now - 10 * DAY,
+    text: `## Decisions\nAdopted legacy token format alpha_key ${'detail '.repeat(120)}`,
+  });
+  store.archive({
+    event_id: 'e-new',
+    project: '/proj/t2',
+    session_id: 'ses_new',
+    created_at: now - 1 * DAY,
+    text: `## Decisions\nAdopted modern token format alpha_key ${'detail '.repeat(120)}`,
+  });
+  store.close();
+
+  // 1. trim_expand without id runs discovery mode
+  const discovered = await expandTool.execute({ tool: 'read', target: 'config.ts' }, {});
+  assert.equal(discovered.output.found, true);
+  assert.equal(discovered.output.mode, 'list');
+  assert.equal(discovered.output.refs[0].id, 'trm_v100');
+  assert.match(discovered.content, /trm_v100/);
+
+  // 2. trim_expand with id + regex
+  const expanded = await expandTool.execute({ id: 'trm_v100', grep: 'PORT\\s*=\\s*\\d+', regex: true }, {});
+  assert.equal(expanded.output.found, true);
+  assert.equal(expanded.output.matchedLines, 1);
+
+  // 3. trim_history_search with days, sessionID, limit, and fullSection
+  const recentOnly = await searchTool.execute({ query: 'alpha_key', days: 3 }, {});
+  assert.equal(recentOnly.output.results.length, 1);
+  assert.equal(recentOnly.output.results[0].event_id, 'e-new');
+
+  const sessionOnly = await searchTool.execute({ query: 'alpha_key', sessionID: 'ses_old' }, {});
+  assert.equal(sessionOnly.output.results.length, 1);
+  assert.equal(sessionOnly.output.results[0].event_id, 'e-old');
+
+  const fullSec = await searchTool.execute({ query: 'alpha_key', section: 'decisions', fullSection: true }, {});
+  assert.ok(fullSec.output.results[0].snippet.length > 400, 'fullSection returns expanded excerpt > 400 chars');
+
+  await stop();
+  rmSync(d, { recursive: true });
+});

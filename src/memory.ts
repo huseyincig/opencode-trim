@@ -201,27 +201,36 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
     regs.push(validReg(await ctx.tool.transform((editor: any) => {
       editor.add({
         name: EXPAND_TOOL_NAME,
-        description: 'Restore or inspect a pruned tool output cached by opencode-trim under a ref ID (e.g. "trm_..."). Supports optional line range (startLine, endLine) and case-insensitive grep filtering.',
+        description: 'Restore, slice, or list pruned tool outputs cached by opencode-trim in the project vault. Pass `id` (e.g. "trm_...") with optional line range (startLine, endLine) and grep/regex filtering to inspect a cached output, or omit `id` (with optional `tool`, `target`, `limit`) to list recent cached refs.',
         input: {
           type: 'object',
           properties: {
-            id: { type: 'string', minLength: 1, maxLength: 128, description: 'The cached ref ID from a pruning notice (e.g. "trm_...").' },
+            id: { type: 'string', minLength: 1, maxLength: 128, description: 'Cached ref ID from a pruning notice (e.g. "trm_..."). Omit `id` to list recent cached refs in the vault (discovery mode).' },
+            tool: { type: 'string', maxLength: 64, description: 'Optional discovery filter when `id` is omitted: filter cached refs by tool name (e.g. "read", "shell").' },
+            target: { type: 'string', maxLength: 256, description: 'Optional discovery filter when `id` is omitted: case-insensitive substring match on target path or command.' },
+            limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Optional discovery limit when `id` is omitted (default 20, max 50).' },
             startLine: { type: 'integer', minimum: 1, description: 'Optional 1-based start line (inclusive).' },
             endLine: { type: 'integer', minimum: 1, description: 'Optional 1-based end line (inclusive).' },
-            grep: { type: 'string', maxLength: 200, description: 'Optional case-insensitive substring filter.' },
+            grep: { type: 'string', maxLength: 200, description: 'Optional substring or regex line filter.' },
+            regex: { type: 'boolean', description: 'Optional: treat `grep` as a regular expression (bounded/ReDoS-checked) instead of a literal substring.' },
+            caseSensitive: { type: 'boolean', description: 'Optional: make `grep` matching case-sensitive (default false).' },
+            maxChars: { type: 'integer', minimum: 200, maximum: 50000, description: 'Optional maximum characters to return (default 12000).' },
           },
-          required: ['id'], additionalProperties: false,
+          required: [], additionalProperties: false,
         },
         output: {
           type: 'object',
           properties: {
             found: { type: 'boolean' },
             id: { type: 'string' },
+            mode: { type: 'string' },
             tool: { type: ['string', 'null'] },
             target: { type: ['string', 'null'] },
             totalLines: { type: 'integer' },
             matchedLines: { type: 'integer' },
             truncated: { type: 'boolean' },
+            totalVaultRows: { type: 'integer' },
+            refs: { type: 'array' },
             text: { type: 'string' },
           },
           required: ['found', 'id', 'text'],
@@ -230,6 +239,24 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
         execute: async (input: any, context: any) => {
           if (context?.signal?.aborted) throw new Error('Cancelled');
           const id = input?.id;
+          if (id === undefined || id === null) {
+            if (input?.tool !== undefined && input?.tool !== null && (typeof input.tool !== 'string' || input.tool.length > 64)) {
+              throw new Error('tool must be a string up to 64 chars');
+            }
+            if (input?.target !== undefined && input?.target !== null && (typeof input.target !== 'string' || input.target.length > 256)) {
+              throw new Error('target must be a string up to 256 chars');
+            }
+            if (input?.limit !== undefined && input?.limit !== null && (typeof input.limit !== 'number' || !Number.isInteger(input.limit) || input.limit < 1 || input.limit > 50)) {
+              throw new Error('limit must be an integer between 1 and 50');
+            }
+            const out = store.listVault({
+              project,
+              tool: input?.tool,
+              target: input?.target,
+              limit: input?.limit,
+            });
+            return { content: out.text, output: out };
+          }
           if (typeof id !== 'string' || !id.trim() || id.length > 128) throw new Error('id must be a non-empty string');
           const out = store.getVault({
             project,
@@ -237,18 +264,25 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
             startLine: input?.startLine,
             endLine: input?.endLine,
             grep: input?.grep,
+            regex: input?.regex === true,
+            caseSensitive: input?.caseSensitive === true,
+            maxChars: input?.maxChars,
           });
           return { content: out.text, output: out };
         },
       });
       editor.add({
         name: TOOL_NAME,
-        description: 'Search archived compaction summaries of earlier context for this project. Returns short snippets; use only when past decisions are needed.',
+        description: 'Search archived compaction summaries of earlier context for this project. Supports optional section, sessionID, days, limit, and fullSection filters.',
         input: {
           type: 'object',
           properties: {
             query: { type: 'string', minLength: 1, maxLength: MAX_QUERY },
             section: { type: 'string', description: `Optional: restrict the match to one section of the archived summary. One of: ${SECTION_NAMES.join(', ')} (case, spaces and hyphens are tolerated, e.g. "Work State", "next-move").` },
+            sessionID: { type: 'string', maxLength: 256, description: 'Optional: restrict search to a specific session ID.' },
+            days: { type: 'integer', minimum: 1, maximum: 3650, description: 'Optional: restrict search to summaries from the last N days.' },
+            limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Optional: maximum number of results to return (default 5, max 20).' },
+            fullSection: { type: 'boolean', description: 'Optional: return expanded section/summary excerpts (up to 2400 chars) instead of 400-char snippets.' },
           },
           required: ['query'], additionalProperties: false,
         },
@@ -286,7 +320,24 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
             section = normalizeSection(input.section);
             if (!section) throw new Error(`section must be one of: ${SECTION_NAMES.join(', ')}`);
           }
-          const results = store.search(section ? { project, query: q, section } : { project, query: q });
+          if (input.sessionID !== undefined && input.sessionID !== null && (typeof input.sessionID !== 'string' || !input.sessionID.trim() || input.sessionID.length > 256)) {
+            throw new Error('sessionID must be a non-empty string');
+          }
+          if (input.days !== undefined && input.days !== null && (typeof input.days !== 'number' || !Number.isInteger(input.days) || input.days < 1 || input.days > 3650)) {
+            throw new Error('days must be an integer between 1 and 3650');
+          }
+          if (input.limit !== undefined && input.limit !== null && (typeof input.limit !== 'number' || !Number.isInteger(input.limit) || input.limit < 1 || input.limit > 20)) {
+            throw new Error('limit must be an integer between 1 and 20');
+          }
+          const results = store.search({
+            project,
+            query: q,
+            ...(section ? { section } : {}),
+            ...(input.sessionID ? { sessionID: input.sessionID } : {}),
+            ...(input.days ? { days: input.days } : {}),
+            ...(input.limit ? { limit: input.limit } : {}),
+            ...(input.fullSection === true ? { fullSection: true } : {}),
+          });
           callHook(hooks?.onSearch, { sessionID: sessionIdOf(context), results });
           return { content: format(results), output: { results } };
         },

@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/opencode-trim?color=blue&logo=npm&logoColor=white)](https://www.npmjs.com/package/opencode-trim)
 [![OpenCode: V2 (>=2.3.0)](https://img.shields.io/badge/OpenCode-V2%20(%3E%3D2.3.0)-10b981?logo=terminal&logoColor=white)](https://opencode.ai)
 [![V2 host baseline](https://img.shields.io/badge/Host%20baseline-v2.3.2%20verified-10b981?logo=checkmarx&logoColor=white)](AUDIT.md)
-[![Tests: 500/500 Passing](https://img.shields.io/badge/Tests-500%2F500%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
+[![Tests: 503/503 Passing](https://img.shields.io/badge/Tests-503%2F503%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
 [![Node.js](https://img.shields.io/badge/node-%5E26.0.0-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -18,16 +18,16 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 
 ## 📊 Verification & Live Acceptance
 
-> OpenCode Trim **v0.7.1** was verified on **22 November 2026** against **OpenCode V2 (`>=2.3.0`)** on Node **26.13.1** and Bun **1.4.4**.
+> OpenCode Trim **v0.7.2** was verified on **23 November 2026** against **OpenCode V2 (`>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
 
-- **Current Automated Verification:** **500 / 500** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, recoverable vault, and TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
+- **Current Automated Verification:** **503 / 503** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, recoverable vault, and TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
 - **Deterministic Compression & Pruning Benchmark (`npm run bench`):**
   - **24 Command Families:** `1,801,616 B` input → `2,483 B` output (`≈99.86%` reduction on the adversarial progress/noise corpus, `allChanged: true`, per-family median **0.04–0.20 ms** with RAM LRU memoization).
   - **Context Pruning:** `388 / 400` eligible historical tool results pruned (`757,266` characters / `≈252,422` estimated tokens reclaimed, median `≈7 ms`).
 - **Packed Tarball & Dual-Runtime Verification:** `npm pack` `.tgz` artifact verified in isolated Node **26.13.1** and Bun **1.4.4** sandboxes across `.`, `./tui`, `./rpc`, `./core`, `./prune`, and `./pressure` entrypoints.
 - **Live OpenCode V2 Host Acceptance:** Verified plugin load, `tool.execute.after` shell compression, `session.context` pruning, real-provider compression/pruning (`opencode-go/deepseek-v4.1-flash` and `opencode-go/beam-free`), SQLite FTS5 compaction archiving & `trim_history_search`, multi-location fail-closed isolation, and TUI sidebar rendering across 80–200 column widths.
 
-Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.7.1 release notes](CHANGELOG.md) for the latest changes.
+Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.7.2 release notes](CHANGELOG.md) for the latest changes.
 
 ---
 
@@ -49,7 +49,7 @@ Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for repr
 
 ## 📦 Installation
 
-The current version is **0.7.1** (OpenCode **V2 `>=2.3.0`**, Node.js **`^26.0.0`**).
+The current version is **0.7.2** (OpenCode **V2 `>=2.3.0`**, Node.js **`^26.0.0`**).
 
 OpenCode Trim supports **Global**, **Project-Local**, **`.opencode/plugins/` Local Wrapper / Symlink**, **Local Development (`file://`)**, and **Remote TUI Client (`cli.json`)** installation modes.
 
@@ -76,7 +76,7 @@ Or pin an exact version and configure optional features (such as the TUI sidebar
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     [
-      "opencode-trim@0.7.1",
+      "opencode-trim@0.7.2",
       {
         "enabled": true,
         "shell": true,
@@ -298,13 +298,13 @@ Because OpenCode V2 auto-discovers `./tui` from `package.json`, the sidebar uses
 ### 🔽 Collapsed View (Default)
 
 ```text
-▶ Trim                     v0.7.1
+▶ Trim                     v0.7.2
 Context              74% (740k/1M)
 Savings           -106k | 12 drops
 Memory                 4 summaries
 ```
 
-- **Header:** Clickable disclosure header (`▶ Trim` / `▼ Trim`), current version (`v0.7.1`), and status marker (`!` when stale, `?` before first snapshot).
+- **Header:** Clickable disclosure header (`▶ Trim` / `▼ Trim`), current version (`v0.7.2`), and status marker (`!` when stale, `?` before first snapshot).
 - **Context:** Host-native token usage (`input + cache.read` from the last assistant turn after any completed compaction) over the model catalog limit, falling back to Trim's `~`-prefixed estimate only when native usage is unavailable.
 - **Savings:** Total characters saved across shell compression, list filtering, and context pruning (`Idle` when zero).
 - **Memory:** Displayed in collapsed view only when the optional FTS5 memory store is active or reporting an error.
@@ -314,7 +314,7 @@ Memory                 4 summaries
 Clicking the `▶ Trim` header expands the full operational breakdown:
 
 ```text
-▼ Trim                     v0.7.1
+▼ Trim                     v0.7.2
 Context
 74%                      740k/1M
 Optimization
@@ -345,8 +345,13 @@ When `memory.enabled: true` is configured, OpenCode Trim archives native compact
 - **Structured Secret Redaction:** Scrubs PEM blocks, `Bearer`/`Basic` tokens, JWTs, OpenAI/Anthropic/GitHub/GitLab/Slack/AWS/Google/npm keys, URL passwords, and nested secret-keyed JSON/env values (`[REDACTED]`). Unclosed or over-depth structured values fail closed through the end of the text.
 - **Section-Aware FTS5 Search (`trim_history_search`):**
   - Parses canonical Markdown `##` headings (`objective`, `requirements`, `decisions`, `work_state`, `next_move`, `relevant_files`, `important_context`), tolerating case, spaces, hyphens, numbering, and colons while ignoring headings inside fenced code blocks.
+  - Supports optional `section`, `sessionID`, `days` (recency window), `limit` (`1..20`), and `fullSection` (`2,400`-char expanded excerpt vs `400`-char snippet) filters.
   - Ranks matches by distinct query-term hits first, then newest within the same session, then BM25 rank and recency (scanning up to `1,000` rows / `8,000,000` chars inside a read transaction).
   - Enforces `agentAllowlist` and `agentDenylist` in `ctx.tool.hook("execute.before")`.
+- **Recoverable Pruning Vault & Ref Discovery (`trim_expand`):**
+  - Stores pruned tool outputs in a secret-redacted SQLite `vault` table (`maxVaultRows: 500` per project).
+  - **Ref Discovery Mode:** Calling `trim_expand` without `id` lists recent cached refs (`id`, `tool`, `target`, `totalLines`, `date`, and `totalVaultRows` capacity) with optional `tool`, `target`, and `limit` filters so pruned outputs remain discoverable even after pruning notices leave active context.
+  - **Slicing & Bounded Regex Grep:** Passing `id` (`"trm_..."`) restores the output with optional `startLine`, `endLine`, `grep`, `regex` (ReDoS-guarded), `caseSensitive`, and `maxChars` (default `12,000` chars) bounds.
 
 ---
 

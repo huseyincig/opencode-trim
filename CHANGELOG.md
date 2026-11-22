@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2 — 2026-11-23
+
+- **Vault Ref Discovery Mode, Safe Regex/Case Grep & Bounded Expansion (`src/memory-store.ts`, `src/memory.ts`, `test/synthesis-upgrades.test.ts`)**:
+  - Added `store.listVault()` and made `id` optional on `trim_expand`: omitting `id` enters discovery mode, returning recent cached vault refs (`id`, `tool`, `target`, `totalLines`, `date`) and `totalVaultRows` capacity with optional `tool`, `target`, and `limit` (`1..50`) filters.
+  - Added ReDoS-guarded `regex` and `caseSensitive` options to `trim_expand` `grep` filtering and tightened default `maxChars` from `20,000` to `12,000` characters (configurable `200..50000`).
+- **Compaction History Search Filters (`src/memory-store.ts`, `src/memory.ts`)**:
+  - Extended `trim_history_search` and `store.search()` with optional `sessionID`, `days` (`1..3650` recency window), `limit` (`1..20`), and `fullSection` (`2,400`-char expanded excerpt) filters.
+- **Verification**: **`503 / 503`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
+
 ## 0.7.1 — 2026-11-22
 
 - **Node.js 26 `node_modules` Package Exports Fix (`package.json`, `test/tui-package.test.ts`)**:
