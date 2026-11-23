@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.3 — 2026-11-23
+
+- **`contextWindowCap` vs. Large `model.output` Reserve Fix & V2 `step-finish` Token Calibration (`src/pressure.ts`, `src/plugin.ts`)**:
+  - Bounded `model.output` contribution to `reserve` at `Math.floor(context * 0.25)` so models with large output limits (e.g. `deepseek-v4.1-flash` with `context: 1000000, output: 384000`) combined with `contextWindowCap` (e.g. `350000`) always compute valid `usableTokens` (`262,500`) and pressure `ratio` instead of returning `undefined`.
+  - Extended `extractMsgReportedTokens()` to read provider token counts from `msg.info.tokens`/`usage` and V2 `step-finish` parts (`input + output + reasoning + cache.read + cache.write`), and recorded the calibrated token count in `contextStats`.
+- **Compound Read-Only Shell Pruning (`src/prune.ts`, `test/synthesis-upgrades.test.ts`)**:
+  - Updated `readOnlyCommand()` to strip harmless descriptor merges (`2>&1`, `1>&2`, `>/dev/null`, `2>/dev/null`), split top-level `&&` / `|` / `;` segments via `splitSegments()`, and validate each segment independently against `SAFE_SHELL` and `!mutatingArgs()`.
+  - Added `cd`, `cat`, `nl`, `sed` (rejecting `-i`/`--in-place`/`-f`/`--file` and `w` write commands), `openspec validate|list|show|status|view`, and `git -C <dir> ...` to `SAFE_SHELL`, while continuing to block mutating compound commands, file redirects, and instruction/secret files (`protectedShell`).
+- **Verification**: **`505 / 505`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
+
 ## 0.7.2 — 2026-11-23
 
 - **Vault Ref Discovery Mode, Safe Regex/Case Grep & Bounded Expansion (`src/memory-store.ts`, `src/memory.ts`, `test/synthesis-upgrades.test.ts`)**:

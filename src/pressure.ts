@@ -64,19 +64,40 @@ function limitedStringify(value: unknown, maxLength: number = 600_000): string {
   try { const encoded=JSON.stringify(value); return typeof encoded==='string' ? encoded.slice(0,maxLength) : ''; }
   catch { return ''; }
 }
-function extractMsgReportedTokens(msg: any): number | undefined {
-  if(!obj(msg)) return undefined;
-  const role=msg.role??msg.type;
-  if(role!=='assistant') return undefined;
-  const t=obj(msg.tokens)?msg.tokens:obj(msg.usage)?msg.usage:undefined;
-  if(!t) return asPositiveInt(msg.tokens);
+function parseTokenBag(t: any): number | undefined {
+  if(!obj(t)) return undefined;
   const inp=asPositiveInt(t.input)??asPositiveInt(t.prompt)??asPositiveInt(t.inputTokens)??0;
   const out=asPositiveInt(t.output)??asPositiveInt(t.completion)??asPositiveInt(t.outputTokens)??0;
+  const reasoning=asPositiveInt(t.reasoning)??asPositiveInt(t.reasoningTokens)??0;
   const cacheRead=obj(t.cache)?(asPositiveInt(t.cache.read)??0):(asPositiveInt(t.cacheRead)??0);
   const cacheWrite=obj(t.cache)?(asPositiveInt(t.cache.write)??0):(asPositiveInt(t.cacheWrite)??0);
-  const sum=inp+out+cacheRead+cacheWrite;
+  const sum=inp+out+reasoning+cacheRead+cacheWrite;
   if(sum>0) return sum;
   return asPositiveInt(t.total)??asPositiveInt(t.totalTokens);
+}
+function extractMsgReportedTokens(msg: any): number | undefined {
+  if(!obj(msg)) return undefined;
+  const role=msg.role??msg.type??msg.info?.role;
+  if(role!=='assistant') return undefined;
+  const direct=obj(msg.tokens)?msg.tokens:obj(msg.usage)?msg.usage:obj(msg.info?.tokens)?msg.info.tokens:obj(msg.info?.usage)?msg.info.usage:undefined;
+  if(direct) {
+    const parsed=parseTokenBag(direct);
+    if(parsed!==undefined) return parsed;
+  }
+  const numDirect=asPositiveInt(msg.tokens)??asPositiveInt(msg.info?.tokens);
+  if(numDirect!==undefined) return numDirect;
+  const parts=Array.isArray(msg.content)?msg.content:Array.isArray(msg.parts)?msg.parts:undefined;
+  if(parts) {
+    let lastPartTokens: number | undefined;
+    for(const part of parts) {
+      if(!obj(part)) continue;
+      const bag=obj(part.tokens)?part.tokens:obj(part.usage)?part.usage:undefined;
+      const p=bag?parseTokenBag(bag):undefined;
+      if(p!==undefined) lastPartTokens=p;
+    }
+    if(lastPartTokens!==undefined) return lastPartTokens;
+  }
+  return undefined;
 }
 /** Only estimates model-visible text; media tokens are not predictable from these hooks. */
 export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitEntry>, options: any): PressureEstimate {
@@ -128,8 +149,9 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
   }
   const reportedTokens=lastReportedBase!==undefined ? lastReportedBase+trailingAfterReported : undefined;
   const effectiveTokens=reportedTokens!==undefined ? Math.max(estimatedTokens,reportedTokens) : estimatedTokens;
-  const reserve=Math.max(options.outputReserveTokens,model.output??0);
   const context=model.context;
+  const cappedModelOutput=context&&model.output ? Math.min(model.output,Math.floor(context*0.25)) : (model.output??0);
+  const reserve=Math.max(options.outputReserveTokens,cappedModelOutput);
   const usable=context && context>reserve ? context-reserve:undefined;
   const ratio=usable ? effectiveTokens/usable:undefined;
   const out: PressureEstimate = {estimatedTokens,estimatedChars,modelContext:context,modelSource:model.source,usableTokens:usable,

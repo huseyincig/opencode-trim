@@ -477,7 +477,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   const sessionOf=(event: any): string | undefined => {const s=event?.sessionID;return typeof s==='string'&&s?s:undefined;};
   const observe=(fn: (s: any) => void): void => {if(!stats)return;try{fn(stats);}catch{/* never affect the engine */}};
   const contextStats=(event: any, pressure: any)=>observe((s: any)=>s.recordContext({
-    sessionID:sessionOf(event),estimatedTokens:pressure.estimatedTokens,estimatedChars:pressure.estimatedChars,
+    sessionID:sessionOf(event),estimatedTokens:pressure.reportedTokens!==undefined?Math.max(pressure.estimatedTokens,pressure.reportedTokens):pressure.estimatedTokens,estimatedChars:pressure.estimatedChars,
     usableTokens:pressure.usableTokens,limitTokens:pressure.modelContext,ratio:pressure.ratio,
     source:pressure.modelSource,media:pressure.mediaPresent}));
   const runPruning=async(event: any, kind: string): Promise<void> => {

@@ -1098,3 +1098,84 @@ test('Step 12c: trim_expand discovery mode & trim_history_search sessionID/days/
   await stop();
   rmSync(d, { recursive: true });
 });
+
+// ============================================================================
+// Step 13: Capped Model Output Reserve, Compound Read-Only Shell Pruning & TUI Cap Limit
+// ============================================================================
+
+test('Step 13a: estimateRequest bounds model.output when contextWindowCap is smaller than model.output and reads V2 step-finish tokens', () => {
+  const opts = parseOptions({ contextWindowCap: 350000 });
+  const catalog = new Map([['evren/deepseek-v4.1-flash', { context: 1_000_000, output: 384_000 }]]);
+  const event = {
+    model: { providerID: 'evren', id: 'deepseek-v4.1-flash' },
+    system: [],
+    tools: {},
+    messages: [
+      {
+        id: 'm1',
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Inspecting session' },
+          {
+            type: 'step-finish',
+            tokens: { input: 65_570, output: 1200, reasoning: 300, cache: { read: 600_000, write: 0 } },
+          },
+        ],
+      },
+    ],
+  };
+
+  const est = estimateRequest(event, catalog, opts);
+  assert.equal(est.modelContext, 350_000);
+  assert.equal(est.usableTokens, 262_500, 'reserve bounded to 25% of capped 350k window (87.5k)');
+  assert.ok(typeof est.ratio === 'number' && est.ratio > 2.5, `expected ratio > 2.5, got ${est.ratio}`);
+  assert.ok((est.reportedTokens ?? 0) >= 665_570);
+});
+
+test('Step 13b: pruneContext prunes read-only chained/piped/2>&1 shell commands while blocking mutating and secret commands', () => {
+  const safeCommands = [
+    "cd /opt/hhc-workspace/opencode-hi && sed -n '240,560p' src/index.ts",
+    'cd /opt/hhc-workspace/opencode-hi && grep -R "token" src/ | head -n 40',
+    'openspec validate --strict 2>&1',
+    'cat src/app.ts | nl -ba | head -n 30',
+    'git -C /opt/hhc-workspace/opencode-hi status --short 2>&1',
+  ];
+
+  const opts = parseOptions({
+    pruneAfterToolChars: 10000,
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneMinResultChars: 500,
+  });
+
+  for (const command of safeCommands) {
+    const messages: any[] = [];
+    for (let i = 0; i < 10; i++) {
+      messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: 'shell', input: { command } }] });
+      messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: 'shell', result: { type: 'text', value: `output ${i}\n` + 'x'.repeat(2500) } }] });
+    }
+    const event = { sessionID: 's-safe', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+    const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.95, usableTokens: 15000 } });
+    assert.ok(res.pruned > 0, `expected safe command to be eligible for pruning: ${command}`);
+  }
+
+  const unsafeOrProtectedCommands = [
+    "cd /opt/hhc-workspace/opencode-hi && sed -i 's/foo/bar/g' src/index.ts",
+    'cd /opt/hhc-workspace/opencode-hi && rm -rf dist',
+    'cat src/app.ts > /tmp/out.txt',
+    "cd /opt/hhc-workspace/opencode-hi && sed -n '1,20p' .env",
+    'cat AGENTS.md | head -n 20',
+  ];
+
+  for (const command of unsafeOrProtectedCommands) {
+    const messages: any[] = [];
+    for (let i = 0; i < 10; i++) {
+      messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: 'shell', input: { command } }] });
+      messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: 'shell', result: { type: 'text', value: `output ${i}\n` + 'x'.repeat(2500) } }] });
+    }
+    const event = { sessionID: 's-unsafe', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+    const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.95, usableTokens: 15000 } });
+    assert.equal(res.pruned, 0, `expected unsafe/protected command NOT to be pruned: ${command}`);
+  }
+});

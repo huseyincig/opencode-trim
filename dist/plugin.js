@@ -550,7 +550,7 @@ export async function setupTrim(ctx) {
     }
     catch { /* never affect the engine */ } };
     const contextStats = (event, pressure) => observe((s) => s.recordContext({
-        sessionID: sessionOf(event), estimatedTokens: pressure.estimatedTokens, estimatedChars: pressure.estimatedChars,
+        sessionID: sessionOf(event), estimatedTokens: pressure.reportedTokens !== undefined ? Math.max(pressure.estimatedTokens, pressure.reportedTokens) : pressure.estimatedTokens, estimatedChars: pressure.estimatedChars,
         usableTokens: pressure.usableTokens, limitTokens: pressure.modelContext, ratio: pressure.ratio,
         source: pressure.modelSource, media: pressure.mediaPresent
     }));

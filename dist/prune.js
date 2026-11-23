@@ -91,7 +91,7 @@ const STATUS_KEYWORD = /timed out|killed|interrupted|cancell?ed|terminated|timeo
 function statusNotice(text) { return STATUS_KEYWORD.test(text) && eachLine(text, (l) => l.length < 240 && STATUS_NOTICE.test(l)); }
 /** Own-data reader that never invokes accessors or traps. */
 const INSTRUCTION_PATH = /(?:^|[/\\])(?:AGENTS|PROTOCOL|CLAUDE|GEMINI|SECURITY|POLICY|INSTRUCTIONS|CONTRIBUTING|README|SKILL)\.md$|(?:^|[/\\])(?:opencode|plugin|secrets)\.jsonc?$|(?:^|[/\\])(?:\.npmrc|\.netrc|id_(?:rsa|ed25519|ecdsa|dsa)(?:_sk)?)$|(?:^|[/\\])\.env(?:\.[^/\\]+)?$/i;
-const SAFE_SHELL = /^\s*(?:(?:ls|pwd|echo|grep|rg|find|head|tail|wc|tree|stat|git\s+(?:status|log|branch|diff\s+--stat)|npm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|pnpm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|bun\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|cargo\s+(?:test|check|build|clippy)|pytest|vitest|jest|tsc|eslint|biome)\b)/i;
+const SAFE_SHELL = /^\s*(?:(?:cd|ls|pwd|echo|cat|nl|sed|grep|rg|find|head|tail|wc|tree|stat|openspec\s+(?:validate|list|show|status|view)|git\s+(?:(?:-C|--git-dir|--work-tree)\s+\S+\s+)*(?:--no-pager\s+)*(?:status|log|branch|diff\s+--stat)|npm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|pnpm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|bun\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|cargo\s+(?:test|check|build|clippy)|pytest|vitest|jest|tsc|eslint|biome)\b)/i;
 const EXIT_LINE = /exit\s*code:?\s*(\d+)/gi;
 const EXIT_NOTICE = /\b(?:process|command)\s+exited\s+with\s+(?:exit\s+)?code:?\s*(\d+)/gi;
 function failedNotice(text) {
@@ -451,12 +451,22 @@ function readOnlyCommand(name, input) {
     const cmd = safeString(data(input, 'command'));
     if (!cmd || protectedShell(cmd))
         return false;
-    // Semicolon, redirect, pipe and $() mean the command may have side effects.
-    if (/[;|><`&\r\n]|\$\(|\$\{|\$[A-Za-z_]|\x00/.test(cmd))
+    // Strip harmless descriptor merges (2>&1, 1>&2, 2>/dev/null, >/dev/null) before checking for file redirects or backgrounding.
+    const stripped = cmd.replace(/(?:^|(?<=\s))(?:[12]>&[12]|[12]?>\s*\/dev\/null)(?=\s|$)/g, ' ').trim();
+    if (!stripped)
         return false;
-    if (!SAFE_SHELL.test(cmd))
+    // File redirects, backticks, subshells/expansions, newlines/nulls, or single '&' backgrounding may have side effects.
+    if (/[><`\r\n\x00]|\$\(|\$\{|\$[A-Za-z_]|(?:^|[^&])&(?:[^&]|$)/.test(stripped))
         return false;
-    return !mutatingArgs(argv(cmd.trim()));
+    const segments = splitSegments(stripped);
+    if (!segments.length || segments.length > 16)
+        return false;
+    for (const rawSeg of segments) {
+        const seg = rawSeg.trim();
+        if (!seg || !SAFE_SHELL.test(seg) || mutatingArgs(argv(seg)))
+            return false;
+    }
+    return true;
 }
 function argv(cmd) {
     return (cmd.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((t) => t.replace(/^(["'])(.*)\1$/, '$2'));
@@ -465,6 +475,7 @@ const GIT_BRANCH_READ = new Set(['-a', '-r', '-v', '-vv', '--all', '--remotes', 
 const FIND_MUTATING = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls']);
 const MUTATING = {
     find: (t) => FIND_MUTATING.has(t),
+    sed: (t) => /^-(?:[A-Za-z]*[if]|-in-place|-file)\b/i.test(t) || /(?:^|[;/])\s*\d*(?:,\d*)?w\s+\S/i.test(t),
     eslint: (t) => t === '--fix' || t === '--fix-type' || t === '--init',
     biome: (t) => ['init', 'migrate', '--write', '--apply', '--apply-unsafe', '--fix', '--unsafe'].includes(t),
     prettier: (t) => t === '--write' || t === '-w',
@@ -482,8 +493,12 @@ function mutatingArgs(tokens) {
     if (prog === 'cargo')
         return rest.some(t => t === '--fix' || t === '--allow-dirty');
     if (prog === 'git') {
-        if (rest[0] === 'branch')
-            return rest.slice(1).some(t => !GIT_BRANCH_READ.has(t));
+        let idx = 0;
+        while (idx < rest.length && rest[idx].startsWith('-')) {
+            idx += GIT_VALUE.has(rest[idx]) ? 2 : 1;
+        }
+        if (rest[idx] === 'branch')
+            return rest.slice(idx + 1).some(t => !GIT_BRANCH_READ.has(t));
         return rest.some(t => t === '--output' || t === '--ext-diff' || t === '--textconv');
     }
     const check = MUTATING[prog];
