@@ -1105,9 +1105,9 @@ test('Step 12c: trim_expand discovery mode & trim_history_search sessionID/days/
 
 test('Step 13a: estimateRequest bounds model.output when contextWindowCap is smaller than model.output and reads V2 step-finish tokens', () => {
   const opts = parseOptions({ contextWindowCap: 350000 });
-  const catalog = new Map([['evren/deepseek-v4.1-flash', { context: 1_000_000, output: 384_000 }]]);
+  const catalog = new Map([['custom/large-output-model', { context: 1_000_000, output: 384_000 }]]);
   const event = {
-    model: { providerID: 'evren', id: 'deepseek-v4.1-flash' },
+    model: { providerID: 'custom', id: 'large-output-model' },
     system: [],
     tools: {},
     messages: [
@@ -1127,8 +1127,8 @@ test('Step 13a: estimateRequest bounds model.output when contextWindowCap is sma
 
   const est = estimateRequest(event, catalog, opts);
   assert.equal(est.modelContext, 350_000);
-  assert.equal(est.usableTokens, 262_500, 'reserve bounded to 25% of capped 350k window (87.5k)');
-  assert.ok(typeof est.ratio === 'number' && est.ratio > 2.5, `expected ratio > 2.5, got ${est.ratio}`);
+  assert.equal(est.usableTokens, 350_000, 'when uncapped headroom (650k) covers output reserve, usableTokens equals the exact 350k screen budget');
+  assert.ok(typeof est.ratio === 'number' && est.ratio > 1.8, `expected ratio > 1.8, got ${est.ratio}`);
   assert.ok((est.reportedTokens ?? 0) >= 665_570);
 });
 
@@ -1177,5 +1177,142 @@ test('Step 13b: pruneContext prunes read-only chained/piped/2>&1 shell commands 
     const event = { sessionID: 's-unsafe', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
     const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.95, usableTokens: 15000 } });
     assert.equal(res.pruned, 0, `expected unsafe/protected command NOT to be pruned: ${command}`);
+  }
+});
+
+// ============================================================================
+// Step 14: Screen-Matched Simple Config ("350k"/"35%"), Combined V2 tool state.content & Inline Read-Only Scripts
+// ============================================================================
+
+test('Step 14a: out-of-the-box 350k default, maxTokens/pruneAt human shorthand ("350k", "35%"), and 1:1 screen budget math', () => {
+  // 1. Out of the box default caps 1M models at 350k
+  const def = parseOptions();
+  assert.equal(def.contextWindowCap, 350_000);
+
+  // 2. Human shorthand on maxTokens / contextWindowCap / pruneAt
+  assert.equal(parseOptions({ maxTokens: '350k' }).contextWindowCap, 350_000);
+  assert.equal(parseOptions({ maxTokens: '300,000' }).contextWindowCap, 300_000);
+  assert.equal(parseOptions({ contextWindowCap: '250K' }).contextWindowCap, 250_000);
+  assert.equal(parseOptions({ pruneAt: '350k' }).contextWindowCap, 350_000);
+
+  // 3. Percentage pruneAt ("35%" or 35 or 0.35) scales against a 1M model to 350,000 usableTokens!
+  const pctOpts = parseOptions({ pruneAt: '35%' });
+  const catalog1M = new Map([['custom/m1', { context: 1_000_000, output: 384_000 }]]);
+  const event = {
+    model: { providerID: 'custom', id: 'm1' },
+    system: [],
+    tools: {},
+    messages: [
+      {
+        id: 'm1',
+        type: 'assistant',
+        tokens: { input: 264, output: 100, cache: { read: 681_000, write: 0 } },
+        content: [{ type: 'text', text: 'hello' }],
+      },
+    ],
+  };
+  const est = estimateRequest(event, catalog1M, pctOpts);
+  assert.equal(est.modelContext, 350_000);
+  assert.equal(est.usableTokens, 350_000);
+  assert.ok(typeof est.ratio === 'number' && est.ratio >= 681_264 / 350_000);
+});
+
+test('Step 14b: pruneContext & ContextCache prune combined V2 type="tool" parts with state.content + state.metadata.output and msg.type="assistant"', () => {
+  const messages: any[] = [];
+  for (let i = 0; i < 10; i++) {
+    const outText = `file line ${i}\n` + 'x'.repeat(2500);
+    messages.push({
+      id: `msg-${i}`,
+      type: 'assistant', // V2 session_message uses type: 'assistant' without role
+      content: [
+        { type: 'reasoning', text: `thinking step ${i}\n` + 'r'.repeat(1500) },
+        {
+          type: 'tool',
+          id: `call-${i}`,
+          name: 'shell',
+          state: {
+            status: 'completed',
+            input: { command: "cd /opt/proj && sed -n '1,120p' src/index.ts" },
+            content: [{ type: 'text', text: outText }],
+            metadata: { output: outText, exit: 0, truncated: false },
+          },
+        },
+      ],
+    });
+  }
+
+  const opts = parseOptions({
+    pruneAfterToolChars: 10000,
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneMinResultChars: 500,
+  });
+  const event = { sessionID: 's-v2-combined', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+  const cache = new ContextCache();
+  const gate = cache.begin(event, opts, { ratio: undefined });
+  assert.equal(gate.allowNewDrops, true, 'ContextCache.toolChars must count state.content on combined V2 tool parts');
+
+  const res = pruneContext(event, opts, { ...gate, pressure: { ratio: 0.95, usableTokens: 15000 } });
+  assert.ok(res.pruned >= 10, `expected both reasoning and combined tool parts pruned, got ${res.pruned}`);
+  // First message's reasoning and tool state.content[0].text + state.metadata.output must both be pruned
+  assert.equal(messages[0].content[0].text, PRUNED_REASONING);
+  assert.equal(messages[0].content[1].state.content[0].text, PRUNED);
+  assert.equal(messages[0].content[1].state.metadata.output, PRUNED);
+});
+
+test('Step 14c: pruneContext prunes read-only node -e, node --test, sqlite3 -readonly, echo exit=$?, and aft_search/aft_zoom while blocking mutating node -e', () => {
+  const safeShells = [
+    'node -e \'const fs=require("fs"); console.log(fs.readFileSync("src/index.ts","utf8").slice(0,500));\'',
+    'node --input-type=module -e \'const m = await import("./dist/index.js"); console.log(Object.keys(m));\'',
+    'cd /opt/proj && node --import ./tests/support/isolate-env.mjs --test tests/unit/config.test.mjs 2>&1 | tail -40; echo "exit=$?"',
+    'sqlite3 -readonly /tmp/m.db "SELECT count(*) FROM history"; echo ---; date -u +%H:%M:%S',
+    "seq -f 'line-%04g' 1 2000",
+  ];
+  const opts = parseOptions({
+    pruneAfterToolChars: 10000,
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneMinResultChars: 500,
+  });
+
+  for (const command of safeShells) {
+    const messages: any[] = [];
+    for (let i = 0; i < 10; i++) {
+      messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: 'shell', input: { command } }] });
+      messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: 'shell', result: { type: 'text', value: `out ${i}\n` + 'x'.repeat(2500) } }] });
+    }
+    const event = { sessionID: 's-node-safe', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+    const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.95, usableTokens: 15000 } });
+    assert.ok(res.pruned > 0, `expected read-only command to be pruned: ${command}`);
+  }
+
+  for (const toolName of ['aft_search', 'aft_zoom']) {
+    const messages: any[] = [];
+    for (let i = 0; i < 10; i++) {
+      messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: toolName, input: { query: 'foo' } }] });
+      messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: toolName, result: { type: 'text', value: `hit ${i}\n` + 'x'.repeat(2500) } }] });
+    }
+    const event = { sessionID: 's-aft', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+    const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.95, usableTokens: 15000 } });
+    assert.ok(res.pruned > 0, `expected ${toolName} to be eligible for pruning`);
+  }
+
+  const unsafeNodeCommands = [
+    'node -e \'require("fs").writeFileSync("src/a.ts", "hacked")\'',
+    'node -e \'require("fs").rmSync("dist", { recursive: true })\'',
+    'node -e \'require("child_process").execSync("rm -rf /tmp/x")\'',
+    'node -e \'console.log(require("fs").readFileSync(".env", "utf8"))\'',
+  ];
+  for (const command of unsafeNodeCommands) {
+    const messages: any[] = [];
+    for (let i = 0; i < 10; i++) {
+      messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: 'shell', input: { command } }] });
+      messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: 'shell', result: { type: 'text', value: `out ${i}\n` + 'x'.repeat(2500) } }] });
+    }
+    const event = { sessionID: 's-node-unsafe', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+    const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.95, usableTokens: 15000 } });
+    assert.equal(res.pruned, 0, `expected mutating/secret node -e NOT to be pruned: ${command}`);
   }
 });

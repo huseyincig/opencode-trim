@@ -36,6 +36,9 @@ export interface TrimOptions {
     readonly outputReserveTokens: number;
     readonly contextWindow: number;
     readonly contextWindowCap: number;
+    readonly contextWindowRatioCap?: number;
+    readonly maxTokens?: number | string;
+    readonly pruneAt?: number | string;
     readonly supersessionMinChars: number;
     readonly purgeErrorInputs: boolean;
     readonly pruneHistoricalReasoning: boolean;
@@ -70,7 +73,7 @@ export declare const DEFAULTS: Readonly<{
     pressureCriticalRatio: 0.94;
     outputReserveTokens: 8192;
     contextWindow: 0;
-    contextWindowCap: 0;
+    contextWindowCap: 350000;
     supersessionMinChars: 5000;
     purgeErrorInputs: true;
     pruneHistoricalReasoning: true;

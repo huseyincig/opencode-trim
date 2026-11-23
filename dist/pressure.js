@@ -9,24 +9,29 @@ export function resolveModelLimit(event, modelLimits = new Map(), options = {}) 
     const fromCatalog = typeof id === 'string' && typeof provider === 'string' ? modelLimits.get(`${provider}/${id}`) : undefined;
     const configured = asPositiveInt(options?.contextWindow);
     const cap = asPositiveInt(options?.contextWindowCap);
+    const ratioCap = typeof options?.contextWindowRatioCap === 'number' && options.contextWindowRatioCap >= 0.05 && options.contextWindowRatioCap <= 1 ? options.contextWindowRatioCap : undefined;
     const rawContext = input ?? directContext ?? asPositiveInt(fromCatalog?.input) ?? asPositiveInt(fromCatalog?.context) ?? configured;
     const catalogContext = asPositiveInt(fromCatalog?.input) ?? asPositiveInt(fromCatalog?.context);
     let context = rawContext;
     let capped = false;
-    if (cap !== undefined) {
+    if (ratioCap !== undefined && rawContext !== undefined) {
+        const byRatio = Math.max(1024, Math.floor(rawContext * ratioCap));
+        if (context === undefined || byRatio < context) {
+            context = byRatio;
+            capped = true;
+        }
+    }
+    else if (cap !== undefined) {
         if (rawContext !== undefined && cap < rawContext) {
             context = cap;
             capped = true;
         }
-        else if (rawContext === undefined) {
-            context = cap;
-        }
     }
-    const source = input || directContext ? 'event-model' : catalogContext ? 'model-catalog' : (configured || cap) ? 'config' : 'unavailable';
+    const source = input || directContext ? 'event-model' : catalogContext ? 'model-catalog' : configured ? 'config' : 'unavailable';
     const out = { context,
         output: asPositiveInt(direct?.output) ?? asPositiveInt(fromCatalog?.output),
         source };
-    if (cap !== undefined) {
+    if (cap !== undefined || ratioCap !== undefined) {
         out.capped = capped;
         if (capped)
             out.uncappedContext = rawContext;
@@ -153,7 +158,9 @@ export function estimateRequest(event, modelLimits, options) {
     const effectiveTokens = reportedTokens !== undefined ? Math.max(estimatedTokens, reportedTokens) : estimatedTokens;
     const context = model.context;
     const cappedModelOutput = context && model.output ? Math.min(model.output, Math.floor(context * 0.25)) : (model.output ?? 0);
-    const reserve = Math.max(options.outputReserveTokens, cappedModelOutput);
+    const rawReserve = Math.max(options.outputReserveTokens, cappedModelOutput);
+    const uncappedHeadroom = model.capped && context && model.uncappedContext && model.uncappedContext > context ? model.uncappedContext - context : 0;
+    const reserve = Math.max(0, rawReserve - uncappedHeadroom);
     const usable = context && context > reserve ? context - reserve : undefined;
     const ratio = usable ? effectiveTokens / usable : undefined;
     const out = { estimatedTokens, estimatedChars, modelContext: context, modelSource: model.source, usableTokens: usable,

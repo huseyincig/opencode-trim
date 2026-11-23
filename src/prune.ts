@@ -95,7 +95,15 @@ const STATUS_KEYWORD=/timed out|killed|interrupted|cancell?ed|terminated|timeout
 function statusNotice(text: string): boolean {return STATUS_KEYWORD.test(text)&&eachLine(text,(l: string)=>l.length<240&&STATUS_NOTICE.test(l));}
 /** Own-data reader that never invokes accessors or traps. */
 const INSTRUCTION_PATH = /(?:^|[/\\])(?:AGENTS|PROTOCOL|CLAUDE|GEMINI|SECURITY|POLICY|INSTRUCTIONS|CONTRIBUTING|README|SKILL)\.md$|(?:^|[/\\])(?:opencode|plugin|secrets)\.jsonc?$|(?:^|[/\\])(?:\.npmrc|\.netrc|id_(?:rsa|ed25519|ecdsa|dsa)(?:_sk)?)$|(?:^|[/\\])\.env(?:\.[^/\\]+)?$/i;
-const SAFE_SHELL=/^\s*(?:(?:cd|ls|pwd|echo|cat|nl|sed|grep|rg|find|head|tail|wc|tree|stat|openspec\s+(?:validate|list|show|status|view)|git\s+(?:(?:-C|--git-dir|--work-tree)\s+\S+\s+)*(?:--no-pager\s+)*(?:status|log|branch|diff\s+--stat)|npm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|pnpm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|bun\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|cargo\s+(?:test|check|build|clippy)|pytest|vitest|jest|tsc|eslint|biome)\b)/i;
+const SAFE_SHELL=/^\s*(?:(?:cd|ls|pwd|echo|cat|nl|sed|seq|date|grep|rg|find|head|tail|wc|tree|stat|sqlite3\s+-readonly|openspec\s+(?:validate|list|show|status|view)|node\s+(?:--(?:import|loader|conditions|no-warnings|experimental-\S+)\s+\S+\s+)*--test|git\s+(?:(?:-C|--git-dir|--work-tree)\s+\S+\s+)*(?:--no-pager\s+)*(?:status|log|branch|diff\s+--stat)|npm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|pnpm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|bun\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|cargo\s+(?:test|check|build|clippy)|pytest|vitest|jest|tsc|eslint|biome)\b)/i;
+const MUTATING_JS_API=/\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rmSync|rmdir(?:Sync)?|unlink(?:Sync)?|rename(?:Sync)?|copyFile(?:Sync)?|cpSync|mkdir(?:Sync)?|chmod(?:Sync)?|chown(?:Sync)?|truncate(?:Sync)?|createWriteStream|child_process|exec(?:Sync|File|FileSync)?|spawn(?:Sync)?|fork|fetch)\b/;
+function isReadOnlyInlineEval(seg: string): boolean {
+  const trimmed=seg.trim();
+  if(!/^(?:node|bun)\s+(?:--(?:input-type=module|no-warnings|experimental-\S+)\s+)*-e\s+/i.test(trimmed))return false;
+  if(MUTATING_JS_API.test(trimmed))return false;
+  if(trimmed.split(/[\s"'`=<>:;|&(),[\]]+/).some(t=>t&&INSTRUCTION_PATH.test(t)))return false;
+  return true;
+}
 const EXIT_LINE=/exit\s*code:?\s*(\d+)/gi;
 const EXIT_NOTICE=/\b(?:process|command)\s+exited\s+with\s+(?:exit\s+)?code:?\s*(\d+)/gi;
 function failedNotice(text: unknown): boolean {
@@ -168,8 +176,17 @@ function resultTexts(part: any): string[] {
       }
     }
   }
-  const o=data(data(part,'state'),'output');
+  const st=data(part,'state');
+  const o=data(st,'output');
   if(typeof o==='string')out.push(o);
+  const sc=data(st,'content');
+  if(isArr(sc)){
+    const n=Math.min(sc.length,200);
+    for(let i=0;i<n;i++){
+      const item=at(sc,i);const t=obj(item)?data(item,'text'):undefined;
+      if(typeof t==='string')out.push(t);
+    }
+  }
   return out;
 }
 function textFailed(t: string): boolean {
@@ -245,7 +262,28 @@ function accessor(part: any): { get: () => any; set: (v: string) => void } | nul
       const out=data(state,'output');
       if(typeof out==='string'&&writable(state,'output'))
         return {get:()=>data(part,'state')===state?data(state,'output'):undefined,
-          set:(v: string)=>{state.output=v;}};
+          set:(v: string)=>{
+            state.output=v;
+            const meta=data(state,'metadata');
+            if(obj(meta)&&!trapped(meta)&&typeof data(meta,'output')==='string'&&writable(meta,'output'))meta.output=v;
+          }};
+      const list=data(state,'content');
+      if(isArr(list)&&!trapped(list)&&list.length===1){
+        const item=at(list,0);
+        if(obj(item)&&!trapped(item)&&!hasMedia(item)&&data(item,'type')==='text'&&typeof data(item,'text')==='string'&&writable(item,'text')){
+          return {
+            get:()=>{
+              if(data(part,'state')!==state||data(state,'content')!==list||list.length!==1||at(list,0)!==item)return undefined;
+              return data(item,'text');
+            },
+            set:(v: string)=>{
+              item.text=v;
+              const meta=data(state,'metadata');
+              if(obj(meta)&&!trapped(meta)&&typeof data(meta,'output')==='string'&&writable(meta,'output'))meta.output=v;
+            },
+          };
+        }
+      }
     }
   }
   return null;
@@ -320,9 +358,18 @@ function messageTokensImpl(msg: any): number {
     }
     const pt=data(part,'type');
     if(pt==='media'||pt==='image'||pt==='file')tokens+=4000;
-    const so=data(data(part,'state'),'output');
+    const st=data(part,'state');
+    const so=data(st,'output');
     if(pt==='tool'&&typeof so==='string')tokens+=cost(so);
-    const pin=data(part,'input');
+    else if(pt==='tool'){
+      const sc=data(st,'content');
+      if(isArr(sc)){
+        const m=Math.min(sc.length,200);
+        for(let j=0;j<m;j++){const item=at(sc,j);const t=obj(item)?data(item,'text'):undefined;
+          if(typeof t==='string')tokens+=cost(t);}
+      }
+    }
+    const pin=data(part,'input')??data(st,'input');
     if(pin!==undefined)tokens+=Math.ceil(boundedChars(pin)/3)+4;
   }
   return tokens;
@@ -363,16 +410,20 @@ function readOnlyCommand(name: string, input: any): boolean {
   if(!['shell','bash'].includes(name)) return true;
   const cmd=safeString(data(input,'command'));
   if(!cmd || protectedShell(cmd))return false;
-  // Strip harmless descriptor merges (2>&1, 1>&2, 2>/dev/null, >/dev/null) before checking for file redirects or backgrounding.
-  const stripped=cmd.replace(/(?:^|(?<=\s))(?:[12]>&[12]|[12]?>\s*\/dev\/null)(?=\s|$)/g,' ').trim();
+  if(isReadOnlyInlineEval(cmd))return true;
+  // Strip harmless descriptor merges (2>&1, 1>&2, 2>/dev/null, >/dev/null) and exit-code check $? before checking for file redirects or backgrounding.
+  const stripped=cmd.replace(/(?:^|(?<=\s))(?:[12]>&[12]|[12]?>\s*\/dev\/null)(?=\s|$)/g,' ').replace(/\$\?/g,'0').trim();
   if(!stripped)return false;
+  if(isReadOnlyInlineEval(stripped))return true;
   // File redirects, backticks, subshells/expansions, newlines/nulls, or single '&' backgrounding may have side effects.
   if(/[><`\r\n\x00]|\$\(|\$\{|\$[A-Za-z_]|(?:^|[^&])&(?:[^&]|$)/.test(stripped))return false;
   const segments=splitSegments(stripped);
   if(!segments.length||segments.length>16)return false;
   for(const rawSeg of segments){
     const seg=rawSeg.trim();
-    if(!seg||!SAFE_SHELL.test(seg)||mutatingArgs(argv(seg)))return false;
+    if(!seg)return false;
+    if(isReadOnlyInlineEval(seg))continue;
+    if(!SAFE_SHELL.test(seg)||mutatingArgs(argv(seg)))return false;
   }
   return true;
 }
@@ -583,7 +634,7 @@ function candidates(event: any, opts: any): any[] {
     if(totalParts>MAX_PARTS_TOTAL)break;
     const rawId=data(msg,'id');
     const msgId=typeof rawId==='string'?rawId:'';
-    const role=data(msg,'role');
+    const role=data(msg,'role')??data(msg,'type');
     if(role==='assistant'&&opts.pruneHistoricalReasoning!==false&&!isTrimMeshProtected(msg,msg,event?.sessionID)){
       const rc=data(msg,'reasoning_content');
       if(typeof rc==='string'&&rc!==PRUNED_REASONING&&rc.length>=opts.pruneMinResultChars&&writable(msg,'reasoning_content')){

@@ -67,8 +67,10 @@ function toolChars(event: any): number {
       if(type==='tool-result'){
         total+=textChars(ownData(part,'result'));
       }else if(type==='tool'){
-        const out=ownData(ownData(part,'state'),'output');
+        const st=ownData(part,'state');
+        const out=ownData(st,'output');
         if(typeof out==='string')total+=out.length;
+        else total+=textChars(st);
       }
     }
   }

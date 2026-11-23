@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0 — 2026-11-23
+
+- **Out-of-the-Box `350k` Default & Screen-Matched Simple Configuration (`src/config.ts`, `src/pressure.ts`, `README.md`)**:
+  - Set `DEFAULTS.contextWindowCap = 350000` so 1M+ context models are automatically kept within a `350k` token budget out of the box with zero configuration.
+  - Added human-friendly `maxTokens` (`"350k"`, `"350,000"`, `350000`) and `pruneAt` (`"350k"`, `"35%"`, `35`, `0.35`) options, plus string shorthand support on `contextWindowCap`.
+  - When a model window is capped (e.g. `350k` on a `1M` model) and the uncapped hardware headroom (`650k`) already covers the output reserve, `usableTokens` now equals the exact `350,000` screen budget (`1:1` match with the OpenCode `Context` screen, without subtracting internal output reserves from the user's cap).
+- **Combined V2 `type: "tool"` `state.content` + `state.metadata.output` & `msg.type: "assistant"` Pruning (`src/prune.ts`, `src/cache.ts`)**:
+  - Added full pruning and `ContextCache.toolChars` support for combined V2 `type: "tool"` parts whose output resides in `state.content: [{ type: "text", text: "..." }]` and is mirrored in `state.metadata.output`.
+  - Updated `candidates()` to recognize `msg.type === "assistant"` alongside `msg.role === "assistant"` when pruning historical `reasoning` / `thinking` traces.
+- **Expanded Read-Only Shell & Code-Navigation Eligibility (`src/prune.ts`, `src/config.ts`)**:
+  - Added safe read-only `node -e` / `bun -e` inline inspection scripts (rejecting any mutating FS/process/network APIs or protected files), `node ... --test`, `sqlite3 -readonly`, `seq`, `date`, and `$?` exit-status checks to `readOnlyCommand()`.
+  - Added read-only code navigation tools (`aft_search`, `aft_zoom`, `aft_outline`, `aft_imports`, `aft_callers`, `aft_callees`, `webfetch`) to `DEFAULTS.pruneEligibleTools`.
+- **Verification**: **`508 / 508`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked, and verified against a real `681k`-token (`775`-message) OpenCode V2 session (`413` items / `1.58 MB` + `700 KB` duplicate metadata output reclaimed in one pass).
+
 ## 0.7.3 — 2026-11-23
 
 - **`contextWindowCap` vs. Large `model.output` Reserve Fix & V2 `step-finish` Token Calibration (`src/pressure.ts`, `src/plugin.ts`)**:

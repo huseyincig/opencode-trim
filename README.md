@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/opencode-trim?color=blue&logo=npm&logoColor=white)](https://www.npmjs.com/package/opencode-trim)
 [![OpenCode: V2 (>=2.3.0)](https://img.shields.io/badge/OpenCode-V2%20(%3E%3D2.3.0)-10b981?logo=terminal&logoColor=white)](https://opencode.ai)
 [![V2 host baseline](https://img.shields.io/badge/Host%20baseline-v2.3.2%20verified-10b981?logo=checkmarx&logoColor=white)](AUDIT.md)
-[![Tests: 505/505 Passing](https://img.shields.io/badge/Tests-505%2F505%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
+[![Tests: 508/508 Passing](https://img.shields.io/badge/Tests-508%2F508%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
 [![Node.js](https://img.shields.io/badge/node-%5E26.0.0-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -18,16 +18,16 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 
 ## 📊 Verification & Live Acceptance
 
-> OpenCode Trim **v0.7.3** was verified on **23 November 2026** against **OpenCode V2 (`>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
+> OpenCode Trim **v0.8.0** was verified on **23 November 2026** against **OpenCode V2 (`>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
 
-- **Current Automated Verification:** **505 / 505** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, recoverable vault, and TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
+- **Current Automated Verification:** **508 / 508** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, recoverable vault, and TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
 - **Deterministic Compression & Pruning Benchmark (`npm run bench`):**
   - **24 Command Families:** `1,801,616 B` input → `2,483 B` output (`≈99.86%` reduction on the adversarial progress/noise corpus, `allChanged: true`, per-family median **0.04–0.20 ms** with RAM LRU memoization).
   - **Context Pruning:** `388 / 400` eligible historical tool results pruned (`757,266` characters / `≈252,422` estimated tokens reclaimed, median `≈7 ms`).
 - **Packed Tarball & Dual-Runtime Verification:** `npm pack` `.tgz` artifact verified in isolated Node **26.13.1** and Bun **1.4.4** sandboxes across `.`, `./tui`, `./rpc`, `./core`, `./prune`, and `./pressure` entrypoints.
 - **Live OpenCode V2 Host Acceptance:** Verified plugin load, `tool.execute.after` shell compression, `session.context` pruning, real-provider compression/pruning (`opencode-go/deepseek-v4.1-flash` and `opencode-go/beam-free`), SQLite FTS5 compaction archiving & `trim_history_search`, multi-location fail-closed isolation, and TUI sidebar rendering across 80–200 column widths.
 
-Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.7.3 release notes](CHANGELOG.md) for the latest changes.
+Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.8.0 release notes](CHANGELOG.md) for the latest changes.
 
 ---
 
@@ -49,7 +49,7 @@ Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for repr
 
 ## 📦 Installation
 
-The current version is **0.7.3** (OpenCode **V2 `>=2.3.0`**, Node.js **`^26.0.0`**).
+The current version is **0.8.0** (OpenCode **V2 `>=2.3.0`**, Node.js **`^26.0.0`**).
 
 OpenCode Trim supports **Global**, **Project-Local**, **`.opencode/plugins/` Local Wrapper / Symlink**, **Local Development (`file://`)**, and **Remote TUI Client (`cli.json`)** installation modes.
 
@@ -76,12 +76,9 @@ Or pin an exact version and configure optional features (such as the TUI sidebar
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     [
-      "opencode-trim@0.7.3",
+      "opencode-trim@0.8.0",
       {
-        "enabled": true,
-        "shell": true,
-        "toolFiltering": true,
-        "pruning": true,
+        "maxTokens": "350k",
         "tui": {
           "enabled": true
         },
@@ -298,13 +295,13 @@ Because OpenCode V2 auto-discovers `./tui` from `package.json`, the sidebar uses
 ### 🔽 Collapsed View (Default)
 
 ```text
-▶ Trim                     v0.7.3
+▶ Trim                     v0.8.0
 Context              74% (740k/1M)
 Savings           -106k | 12 drops
 Memory                 4 summaries
 ```
 
-- **Header:** Clickable disclosure header (`▶ Trim` / `▼ Trim`), current version (`v0.7.3`), and status marker (`!` when stale, `?` before first snapshot).
+- **Header:** Clickable disclosure header (`▶ Trim` / `▼ Trim`), current version (`v0.8.0`), and status marker (`!` when stale, `?` before first snapshot).
 - **Context:** Host-native token usage (`input + cache.read` from the last assistant turn after any completed compaction) over the model catalog limit, falling back to Trim's `~`-prefixed estimate only when native usage is unavailable.
 - **Savings:** Total characters saved across shell compression, list filtering, and context pruning (`Idle` when zero).
 - **Memory:** Displayed in collapsed view only when the optional FTS5 memory store is active or reporting an error.
@@ -314,7 +311,7 @@ Memory                 4 summaries
 Clicking the `▶ Trim` header expands the full operational breakdown:
 
 ```text
-▼ Trim                     v0.7.3
+▼ Trim                     v0.8.0
 Context
 74%                      740k/1M
 Optimization
@@ -368,6 +365,38 @@ OpenCode Trim includes the Universal OpenCode V2 Plugin Mesh Bridge (`src/bridge
 
 ## ⚙️ Configuration
 
+OpenCode Trim works **out of the box with zero configuration** (automatically capping 1M+ model context windows at **`350k` tokens** so sessions stay fast, focused, and cache-friendly).
+
+### 🎯 Simple Screen-Matched Configuration (Recommended)
+
+You only need to enter the exact **token count** (e.g. `"350k"` or `350000`) or **`% used`** (e.g. `"35%"`) you see on the OpenCode `Context` screen — no manual reserve or ratio math required:
+
+```json
+{
+  "plugins": [
+    {
+      "package": "opencode-trim@latest",
+      "options": {
+        "maxTokens": "350k",
+        "tui": { "enabled": true },
+        "memory": { "enabled": true }
+      }
+    }
+  ]
+}
+```
+
+Or trigger by percentage of the model's context window (`"pruneAt": "35%"` or `"pruneAt": "350k"`):
+
+| Simple Option | Default | Examples | What It Does |
+| :--- | :---: | :--- | :--- |
+| `maxTokens` | `"350k"` (`350000`) | `"350k"`, `"250k"`, `350000`, `0` | Direct target context ceiling matching the OpenCode `Context` token counter (`0` = uncapped model limit). |
+| `pruneAt` | — | `"350k"`, `"35%"`, `35`, `0.35` | Direct threshold by token count (`"350k"`) or percentage of model window (`"35%"`). |
+| `tui.enabled` | `false` | `true` / `false` | Show the compact `Trim` sidebar widget in the OpenCode TUI. |
+| `memory.enabled` | `false` | `true` / `false` | Enable the SQLite FTS5 compaction archive (`trim_history_search`) and recoverable pruning vault (`trim_expand`). |
+
+### 🔧 Advanced Engine Options (Optional)
+
 All options are validated strictly at startup (unknown keys or out-of-range numbers throw immediately):
 
 | Option | Default | Allowed Range / Type | Description |
@@ -387,13 +416,13 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 | `keepRecentToolResults` | `12` | `1..100` | Number of newest eligible tool results always kept unpruned. |
 | `pruneAfterToolChars` | `100000` | `10000..2000000` | Absolute tool-result character budget when model pressure is unavailable. |
 | `pruneMinResultChars` | `800` | `100..200000` | Minimum length of an individual tool result to be eligible for pruning. |
-| `pruneEligibleTools` | `["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find"]` | Up to 40 tool names | Allowlist of tool names eligible for read-only context pruning. |
+| `pruneEligibleTools` | `["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find", "aft_search", "aft_zoom", "aft_outline", "aft_imports", "aft_callers", "aft_callees", "webfetch"]` | Up to 40 tool names | Allowlist of tool names eligible for read-only context pruning. |
 | `pressureStartRatio` | `0.65` | `0.2..0.9` | Context usage ratio where pressure-based pruning begins. |
 | `pressureForceRatio` | `0.85` | `0.5..0.98` | Context usage ratio that authorizes a prompt-cache bust (`allowNewDrops`). |
 | `pressureCriticalRatio` | `0.94` | `0.7..0.999` | Critical context usage ratio for aggressive target reclamation. |
-| `outputReserveTokens` | `8192` | `1024..100000` | Output token reserve subtracted from model context window. |
+| `outputReserveTokens` | `8192` | `1024..100000` | Output token reserve subtracted from uncapped model context windows. |
 | `contextWindow` | `0` | `0..10000000` | Explicit context window fallback for custom providers (`0` = disabled). |
-| `contextWindowCap` | `0` | `0..10000000` | Hard cap (`min(catalog, cap)`) on large model windows (e.g. `200000` on 1M models; `0` = uncapped). |
+| `contextWindowCap` | `350000` | `0..10000000` (or `"350k"`) | Default cap (`min(catalog, cap)`) on large 1M+ model windows (`0` = uncapped). |
 | `supersessionMinChars` | `5000` | `100..200000` | Minimum superseded character mass required to trigger supersession pruning. |
 | `purgeErrorInputs` | `true` | `boolean` | Blank oversized input arguments on stale failed tool calls outside the protected tail while keeping error outputs intact. |
 | `pruneHistoricalReasoning` | `true` | `boolean` | Omit historical `reasoning` / `thinking` traces on assistant turns outside the protected tail while preserving current-turn reasoning and prose. |

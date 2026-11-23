@@ -139,7 +139,7 @@ function totalSaved(snap: any): number | null {
   return any ? sum : null
 }
 
-export const TRIM_VERSION = "0.7.3"
+export const TRIM_VERSION = "0.8.0"
 
 export const SECTION_TITLES: Record<string, string> = { context: "Context", optimization: "Optimization", compaction: "Compaction", memory: "Memory" }
 

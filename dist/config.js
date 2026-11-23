@@ -16,13 +16,13 @@ export const DEFAULTS = Object.freeze({
     keepRecentToolResults: 12,
     pruneAfterToolChars: 100000,
     pruneMinResultChars: 800,
-    pruneEligibleTools: ["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find"],
+    pruneEligibleTools: ["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find", "aft_search", "aft_zoom", "aft_outline", "aft_imports", "aft_callers", "aft_callees", "webfetch"],
     pressureStartRatio: 0.65,
     pressureForceRatio: 0.85,
     pressureCriticalRatio: 0.94,
     outputReserveTokens: 8192,
     contextWindow: 0,
-    contextWindowCap: 0,
+    contextWindowCap: 350000,
     supersessionMinChars: 5000,
     purgeErrorInputs: true,
     pruneHistoricalReasoning: true,
@@ -101,13 +101,70 @@ function validateRules(rules) {
             dropExact: Object.freeze([...(r.dropExact ?? [])]) });
     });
 }
+const EXTRA_OPTION_KEYS = new Set(['maxTokens', 'pruneAt']);
+function parseTokenValue(raw, field) {
+    if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 && raw <= 10_000_000)
+        return raw;
+    if (typeof raw === 'string') {
+        const cleaned = raw.trim().replace(/[,_ ]+/g, '');
+        const m = /^(\d+(?:\.\d+)?)(k|m)?(?:tokens?)?$/i.exec(cleaned);
+        if (m) {
+            const mult = m[2]?.toLowerCase() === 'm' ? 1_000_000 : m[2]?.toLowerCase() === 'k' ? 1_000 : 1;
+            const val = Math.round(Number(m[1]) * mult);
+            if (Number.isSafeInteger(val) && val >= 0 && val <= 10_000_000)
+                return val;
+        }
+    }
+    throw new TypeError(`opencode-trim: ${field} outside 0..10000000`);
+}
+function parsePruneAtValue(raw) {
+    if (typeof raw === 'string') {
+        const t = raw.trim();
+        if (t.endsWith('%')) {
+            const pct = Number(t.slice(0, -1).trim());
+            if (!Number.isFinite(pct) || pct < 5 || pct > 100)
+                throw new TypeError('opencode-trim: pruneAt percentage outside 5%..100%');
+            return { ratioCap: pct / 100 };
+        }
+        return { cap: parseTokenValue(t, 'pruneAt') };
+    }
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+        if (raw === 0)
+            return { cap: 0 };
+        if (raw > 0 && raw <= 1) {
+            if (raw < 0.05)
+                throw new TypeError('opencode-trim: pruneAt ratio outside 0.05..1');
+            return { ratioCap: raw };
+        }
+        if (raw > 1 && raw <= 100 && Number.isInteger(raw)) {
+            if (raw < 5)
+                throw new TypeError('opencode-trim: pruneAt percentage outside 5..100');
+            return { ratioCap: raw / 100 };
+        }
+        return { cap: parseTokenValue(raw, 'pruneAt') };
+    }
+    throw new TypeError('opencode-trim: invalid pruneAt');
+}
 export function parseOptions(options = {}) {
     if (!options || typeof options !== 'object' || Array.isArray(options))
         throw new TypeError('opencode-trim options must be an object');
-    const unknown = Object.keys(options).filter(key => !Object.hasOwn(DEFAULTS, key));
+    const unknown = Object.keys(options).filter(key => !Object.hasOwn(DEFAULTS, key) && !EXTRA_OPTION_KEYS.has(key));
     if (unknown.length)
         throw new Error(`opencode-trim: unknown options: ${unknown.join(', ')}`);
     const result = { ...DEFAULTS, ...options };
+    if (options.contextWindowCap !== undefined) {
+        result.contextWindowCap = parseTokenValue(options.contextWindowCap, 'contextWindowCap');
+    }
+    if (options.maxTokens !== undefined) {
+        result.contextWindowCap = parseTokenValue(options.maxTokens, 'maxTokens');
+    }
+    if (options.pruneAt !== undefined) {
+        const parsed = parsePruneAtValue(options.pruneAt);
+        if (parsed.cap !== undefined)
+            result.contextWindowCap = parsed.cap;
+        if (parsed.ratioCap !== undefined)
+            result.contextWindowRatioCap = parsed.ratioCap;
+    }
     for (const key of ['enabled', 'shell', 'toolFiltering', 'pruning', 'compactionInputPruning', 'purgeErrorInputs', 'pruneHistoricalReasoning', 'pruneUnrelatedDiagnostics']) {
         if (typeof result[key] !== 'boolean')
             throw new TypeError(`opencode-trim: ${key} must be boolean`);
