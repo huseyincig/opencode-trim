@@ -30,9 +30,4 @@ export declare function estimateTokens(text: unknown): number;
 export declare function estimateRequest(event: any, modelLimits: Map<string, ModelLimitEntry>, options: any): PressureEstimate;
 /** Prewarm host-provided limits once. Not a provider generation request. */
 export declare function discoverModelLimits(ctx: any): Promise<Map<string, ModelLimitEntry>>;
-/**
- * Refresh the catalog once for a model that was selected after setup (fallback,
- * provider switch, reloaded config). Missing limits stay missing; no default
- * context window is invented.
- */
 export declare function ensureModelLimit(ctx: any, modelLimits: Map<string, ModelLimitEntry>, model: any, attempted: Set<string>): Promise<void>;

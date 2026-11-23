@@ -20,6 +20,7 @@ const DEBOUNCE_MS = 150
 const POLL_MS = 2000
 const MAX_HIDDEN_RETRIES = 3
 const REFRESH_EVENTS = ["session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.step.ended"]
+const RELOAD_EVENTS = ["plugin.updated", "model.updated", "provider.updated"]
 
 function normDir(v: unknown): string | undefined {
   if (typeof v !== "string" || !v) return undefined
@@ -233,6 +234,18 @@ export default Plugin.define({
                 const off = context.data?.on?.(type, (event: any) => {
                   if (foreign(event)) return
                   if (normalizeEventSessionID(event) !== sessionID) return
+                  schedule()
+                })
+                if (typeof off === "function") unsubs.push(off)
+              } catch {}
+            }
+            for (const type of RELOAD_EVENTS) {
+              try {
+                const off = context.data?.on?.(type, (event: any) => {
+                  if (foreign(event)) return
+                  hiddenStopped = false
+                  hiddenRetries = 0
+                  modelsSynced = false
                   schedule()
                 })
                 if (typeof off === "function") unsubs.push(off)

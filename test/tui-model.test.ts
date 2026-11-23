@@ -196,8 +196,8 @@ test("sections: ordered, only non-empty, label/value/tone/bar exposed", () => {
 })
 
 test("header: title with version, summary only collapsed, marker", () => {
-  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.9.1", summary: "68% | -106k | 12 | mem off", marker: "" })
-  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.9.1", summary: "", marker: "!" })
+  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.9.2", summary: "68% | -106k | 12 | mem off", marker: "" })
+  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.9.2", summary: "", marker: "!" })
   assert.equal(buildHeader(null).marker, "?")
   for (const h of [buildHeader(snap()), buildHeader(null, { expanded: true })]) assert.ok(isAscii(h.title + h.summary + h.marker))
 })

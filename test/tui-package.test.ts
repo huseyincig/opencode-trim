@@ -8,7 +8,7 @@ const tsx = readFileSync(new URL("src/tui.tsx", root), "utf8")
 const peers = ["@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"]
 
 test("package exposes ./tui and keeps existing exports", () => {
-  assert.equal(pkg.version, "0.9.1")
+  assert.equal(pkg.version, "0.9.2")
   assert.deepEqual(pkg.exports["./tui"], { types: "./dist/tui.d.ts", default: "./dist/tui.js" })
   assert.deepEqual(pkg.exports["./rpc"], { types: "./dist/stats-rpc.d.ts", default: "./dist/stats-rpc.js" })
   for (const k of [".", "./core", "./prune", "./pressure"]) {
@@ -117,4 +117,11 @@ test("compaction history fallback wiring", async () => {
   assert.match(tsx, /setHistory\(null\)/)
   // same list as the native context read, including the post-sync re-read
   assert.ok(tsx.indexOf("messages.sync(sessionID)") < tsx.indexOf("compactionHistory(list)"))
+})
+
+test("tui handles v2.4.0 non-blocking startup and plugin/model reload events", () => {
+  assert.match(tsx, /plugin\.updated/)
+  assert.match(tsx, /model\.updated/)
+  assert.match(tsx, /provider\.updated/)
+  assert.match(tsx, /hiddenStopped = false/)
 })

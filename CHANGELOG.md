@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2 — 2026-11-23
+
+- **OpenCode `v2.4.0` Non-Blocking Startup & Hot-Reload Recovery (`src/tui.tsx`, `src/pressure.ts`)**:
+  - Subscribed `src/tui.tsx` to `plugin.updated`, `model.updated`, and `provider.updated` events so the TUI sidebar resets `hiddenStopped`, `hiddenRetries`, and `modelsSynced` and re-probes RPC/models automatically when background plugin loading or floating `@latest` hot-reload completes on `v2.4.0`.
+  - Updated `ensureModelLimit()` in `src/pressure.ts` to allow up to 3 lookup retries per `providerID/id` without burning attempts on empty catalogs returned during `v2.4.0` non-blocking startup.
+- **Code Mode (`event.codemode`) Protection in `ToolDedupeRing` (`src/plugin.ts`)**:
+  - Skipped `ToolDedupeRing` placeholder substitution when `event.codemode === true` (added to `tool.hook("execute.after")` in `@opencode/plugin@2.4.0`), ensuring Code Mode `execute` scripts always receive actual tool output rather than a dedupe reference stub.
+- **Verification**: **`519 / 519`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked against `@opencode/plugin@2.4.0` and `@opentui/*@0.9.7`.
+
 ## 0.9.1 — 2026-11-23
 
 - **Multi-Location Hook Isolation Across `tool.execute.after`, `session.context` & `session.compaction` (`src/plugin.ts`)**:

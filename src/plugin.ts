@@ -396,7 +396,7 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
       const compacted=compactReadEnvelope(text,dir);
       return {text:compacted,changed:compacted!==text};
     }
-    if(ring&&sid&&(!shell||code===undefined||code===0)){
+    if(ring&&sid&&event?.codemode!==true&&(!shell||code===undefined||code===0)){
       const dedupeKey=shell?command:safeJsonLen(event.input)?JSON.stringify(event.input):'';
       const stub=ring.check(sid,event.tool,dedupeKey,text);
       if(stub&&stub.length<text.length)return {text:stub,changed:true};

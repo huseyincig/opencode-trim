@@ -197,15 +197,28 @@ export async function discoverModelLimits(ctx: any): Promise<Map<string, ModelLi
  * provider switch, reloaded config). Missing limits stay missing; no default
  * context window is invented.
  */
+const MODEL_LOOKUP_ATTEMPTS = new WeakMap<Set<string>, Map<string, number>>();
+const MAX_MODEL_LOOKUP_RETRIES = 3;
 export async function ensureModelLimit(ctx: any, modelLimits: Map<string, ModelLimitEntry>, model: any, attempted: Set<string>): Promise<void> {
   if(!(modelLimits instanceof Map)||!(attempted instanceof Set)) return;
   if(typeof model?.providerID!=='string'||typeof model.id!=='string') return;
   const key=`${model.providerID}/${model.id}`;
   if(modelLimits.has(key)||attempted.has(key)) return;
-  attempted.add(key);
+  let counts=MODEL_LOOKUP_ATTEMPTS.get(attempted);
+  if(!counts){ counts=new Map(); MODEL_LOOKUP_ATTEMPTS.set(attempted,counts); }
+  const prev=counts.get(key)??0;
+  if(prev>=MAX_MODEL_LOOKUP_RETRIES){ attempted.add(key); return; }
   try {
     const fresh=await discoverModelLimits(ctx);
     for(const [k,v] of fresh) if(!modelLimits.has(k)) modelLimits.set(k,v);
+    if(modelLimits.has(key)){ counts.delete(key); return; }
+    // On OpenCode v2.4.0 non-blocking startup, ctx.model.list() can return empty before providers finish loading;
+    // do not burn lookup retries on an empty catalog.
+    if(fresh.size>0){
+      const next=prev+1;
+      counts.set(key,next);
+      if(next>=MAX_MODEL_LOOKUP_RETRIES) attempted.add(key);
+    }
   } catch { /* Best effort only. */ }
 }
 

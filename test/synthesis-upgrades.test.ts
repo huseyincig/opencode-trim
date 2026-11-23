@@ -1793,3 +1793,76 @@ test('Step 16c: trim_expand / vault enforces query-time retentionDays on hasVaul
   store.close();
 });
 
+test('Step 17a: ensureModelLimit recovers from v2.4.0 non-blocking startup when ctx.model.list() initially returns empty', async () => {
+  const { ensureModelLimit } = await import('../src/pressure.ts');
+  let callCount = 0;
+  const ctx = {
+    model: {
+      list: async () => {
+        callCount++;
+        if (callCount === 1) return { data: [] };
+        return { data: [{ providerID: 'p', id: 'late-model', limit: { context: 500_000, output: 16_000 } }] };
+      },
+    },
+  };
+  const limits = new Map();
+  const attempted = new Set<string>();
+  const modelRef = { providerID: 'p', id: 'late-model' };
+
+  // First call: catalog is still empty during non-blocking startup
+  await ensureModelLimit(ctx, limits, modelRef, attempted);
+  assert.equal(limits.has('p/late-model'), false);
+
+  // Second call: provider finished loading, ensureModelLimit must retry and discover the limit!
+  await ensureModelLimit(ctx, limits, modelRef, attempted);
+  assert.equal(limits.get('p/late-model')?.context, 500_000);
+});
+
+test('Step 17b: processToolEvent skips ToolDedupeRing when event.codemode === true (v2.4.0 Code Mode)', () => {
+  const opts = parseOptions({ dedupeWindow: 4, minOutputChars: 200, maxOutputLines: 200, maxOutputChars: 50000 });
+  const ring = new ToolDedupeRing(4, 200);
+  const bigUnique = Array.from({ length: 40 }, (_, i) => `src/file_${i}.ts:${i + 1}: match_${i}`).join('\n');
+
+  const e1 = {
+    status: 'completed',
+    sessionID: 's-cm',
+    tool: 'grep',
+    codemode: true,
+    input: { pattern: 'match' },
+    result: { content: bigUnique },
+  };
+  const e2 = {
+    status: 'completed',
+    sessionID: 's-cm',
+    tool: 'grep',
+    codemode: true,
+    input: { pattern: 'match' },
+    result: { content: bigUnique },
+  };
+
+  assert.equal(processToolEvent(e1, opts, undefined, { dedupeRing: ring, sessionID: 's-cm' }), false);
+  assert.equal(processToolEvent(e2, opts, undefined, { dedupeRing: ring, sessionID: 's-cm' }), false);
+  assert.equal(e2.result.content, bigUnique, 'Code Mode execute calls must never receive a dedupe placeholder');
+
+  // Non-codemode duplicate call still deduplicates as expected
+  const e3 = {
+    status: 'completed',
+    sessionID: 's-normal',
+    tool: 'grep',
+    codemode: false,
+    input: { pattern: 'match' },
+    result: { content: bigUnique },
+  };
+  const e4 = {
+    status: 'completed',
+    sessionID: 's-normal',
+    tool: 'grep',
+    codemode: false,
+    input: { pattern: 'match' },
+    result: { content: bigUnique },
+  };
+  processToolEvent(e3, opts, undefined, { dedupeRing: ring, sessionID: 's-normal' });
+  assert.equal(processToolEvent(e4, opts, undefined, { dedupeRing: ring, sessionID: 's-normal' }), true);
+  assert.match(e4.result.content, /byte-identical grep output/);
+});
+
