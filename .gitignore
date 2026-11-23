@@ -5,3 +5,7 @@ coverage/
 .DS_Store
 # Local OpenCode/Hi orchestration tooling and runtime state.
 .opencode/
+# Local Antigravity/agent instructions and project memory.
+GEMINI.md
+AGENTS.md
+.gemini/
