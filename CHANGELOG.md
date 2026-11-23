@@ -1,15 +1,22 @@
 # Changelog
 
-## 0.9.0 — 2026-11-23
+## 0.9.1 — 2026-11-23
 
-- **2-Stage Automatic Compaction Guarantee (`autoCompact`) with Loop Protection (`src/config.ts`, `src/plugin.ts`, `src/memory.ts`)**:
-  - Added `autoCompact` option (`DEFAULTS.autoCompact = true`). On every primary `session.hook("context")` turn, `opencode-trim` first prunes eligible historical tool outputs and reasoning blocks; if the **post-prune** context still meets or exceeds `usableTokens` (`maxTokens`, default `350k`) and has history beyond `protectRecentMessages`, `opencode-trim` automatically calls `ctx.session.compact({ sessionID, delivery: "queue" })`.
-  - Added 3-layer `autoCompactState` loop protection per session (`inFlight` lock with 120s timeout cleared on `session.compaction.ended`/`failed` or when transcript message count / post-prune ratio drops even when `tui.enabled` and `memory.enabled` are both `false`, unconditional 3-turn cooldown `turnsSince >= 3` on subsequent triggers, and auxiliary request exclusion for `compaction`, `title`, and `generate`).
 - **Multi-Location Hook Isolation Across `tool.execute.after`, `session.context` & `session.compaction` (`src/plugin.ts`)**:
   - Short-circuited `tool.execute.after` and `runPruning` (`session.context` and `session.compaction`) on `foreignEvent(event)` (inspecting `e`, `e.data`, `e.properties`, `e.context`, and `e.session` locations) before any tool compression, context pruning, vault write, cache admission, session pressure tracking, auto-compaction trigger, or stats recording.
-- **Vault Query-Time Retention, Strict `50,000` `maxChars` Cap & Non-Lossless Redaction Contract (`src/memory-store.ts`, `src/memory.ts`, `README.md`, `AUDIT.md`)**:
+- **`autoCompact` Shrinkage Reset & Unconditional 3-Turn Cooldown (`src/plugin.ts`, `src/memory.ts`)**:
+  - Automatically clears `inFlight` and updates `lastMsgCount` when a subsequent `session.context` turn observes transcript shrinkage (`msgCount < prev.lastMsgCount`) or pressure drop (`postPressure.ratio < 1.0`) even when `tui.enabled` and `memory.enabled` are both `false`.
+  - Added `onCompactionFailed` hook in `setupMemory` to clear `inFlight` on `session.compaction.failed`, and enforced an unconditional 3-turn cooldown (`prev.turnsSince >= 3`) before any repeat auto-compaction trigger.
+- **Vault Query-Time Retention, Strict `50,000` `maxChars` Cap & Bounded Redacted Vault Documentation (`src/memory-store.ts`, `src/memory.ts`, `README.md`, `AUDIT.md`)**:
   - Enforced `created_at >= now - retentionMs` at query time in `hasVault()`, `getVault()`, and `listVault()` so expired vault rows older than `retentionDays` are never reported as available or returned before a physical prune pass.
   - Aligned `getVault()` `maxChars` clamping (`200..50,000`, default `12,000`) and `trim_expand` `execute()` input validation (`startLine`, `endLine`, `grep`, `maxChars`) with the declared tool schema, and documented the bounded, secret-redacted (non-lossless) vault recovery semantics.
+- **Verification**: **`516 / 516`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked, and real OpenCode V2 host acceptance verified with `compaction.auto: false` + `autoCompact: true`.
+
+## 0.9.0 — 2026-11-23
+
+- **2-Stage Automatic Compaction Guarantee (`autoCompact`) with Loop Protection (`src/config.ts`, `src/plugin.ts`)**:
+  - Added `autoCompact` option (`DEFAULTS.autoCompact = true`). On every primary `session.hook("context")` turn, `opencode-trim` first prunes eligible historical tool outputs and reasoning blocks; if the **post-prune** context still meets or exceeds `usableTokens` (`maxTokens`, default `350k`) and has history beyond `protectRecentMessages`, `opencode-trim` automatically calls `ctx.session.compact({ sessionID, delivery: "queue" })`.
+  - Added 3-layer `autoCompactState` loop protection per session (`inFlight` lock with 120s timeout cleared on `session.compaction.ended`/`failed`, 3-turn cooldown, and auxiliary request exclusion for `compaction`, `title`, and `generate`).
 - **Post-Prune `reportedTokens` Calibration (`src/pressure.ts`, `src/prune.ts`)**:
   - Recorded per-message pruned character deltas (`recordPrunedMsgChars` / `getPrunedMsgChars` via `WeakMap`) during `pruneContext` (with atomic rollback on error) and subtracted their token equivalent (`Math.floor(prunedCharsSoFar / 3)`) from historical assistant `reportedTokens` in `estimateRequest()`. Prevents stale pre-prune provider token counts from inflating post-prune pressure ratios or triggering unnecessary compaction after pruning has already reduced the context below `maxTokens`.
 - **`ContextCache` Start-Band (`65%`) Admission Unlock (`src/cache.ts`)**:
@@ -17,7 +24,7 @@
 - **Cryptographically Signed Reasoning/Thinking Protection & Historical Structured Output Pruning (`src/prune.ts`)**:
   - Added `hasReasoningSignature()` to protect signed `reasoning` / `thinking` parts (`signature`, `thought_signature`, `thoughtSignature`, `encrypted_content`, `redacted_thinking`, `rs_...` IDs, and `metadata` / `providerMetadata` / `providerOptions` signature fields) from in-place mutation, preventing provider HTTP 400 signature-mismatch errors while continuing to prune unsigned historical reasoning traces.
   - Scoped `structured(text)` in `src/prune.ts` to PEM blocks (`-----BEGIN `) and binary NUL streams (`\x00`), allowing historical JSON, XML, and HTML tool outputs outside the protected tail to be archived to the recoverable `tool_vault` and pruned (while `src/compress.ts` continues to protect fresh JSON/XML/HTML from line truncation).
-- **Verification**: **`516 / 516`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked, and real OpenCode V2 host acceptance verified with `compaction.auto: false` + `autoCompact: true`.
+- **Verification**: **`513 / 513`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
 
 ## 0.8.1 — 2026-11-23
 
