@@ -365,36 +365,64 @@ OpenCode Trim includes the Universal OpenCode V2 Plugin Mesh Bridge (`src/bridge
 
 ## ⚙️ Configuration
 
-OpenCode Trim works **out of the box with zero configuration** (automatically capping 1M+ model context windows at **`350k` tokens** so sessions stay fast, focused, and cache-friendly).
+OpenCode Trim works **out of the box with zero configuration** (automatically capping 1M+ model context windows at **`350k` tokens** with **`autoCompact: true`** so sessions stay fast, focused, and cache-friendly).
 
-### 🎯 Simple Screen-Matched Configuration (Recommended)
+### 🎯 Recommended Full `opencode.json` Setup (Best Stability & Zero-Reset Pruning)
 
-You only need to enter the exact **token count** (e.g. `"350k"` or `350000`) or **`% used`** (e.g. `"35%"`) you see on the OpenCode `Context` screen — no manual reserve or ratio math required:
+For the most stable experience in `opencode.json`, combine OpenCode's background compaction setting with OpenCode Trim's screen-matched `"maxTokens": "350k"` and 2-stage `autoCompact` guarantee:
 
 ```json
 {
+  "$schema": "https://opencode.ai/config.json",
+  "compaction": {
+    "auto": true,
+    "background": true,
+    "buffer": "65%"
+  },
   "plugins": [
     {
       "package": "opencode-trim@latest",
       "options": {
         "maxTokens": "350k",
-        "tui": { "enabled": true },
-        "memory": { "enabled": true }
+        "autoCompact": true,
+        "compactionInputPruning": true,
+        "tui": {
+          "enabled": true
+        },
+        "memory": {
+          "enabled": true,
+          "retentionDays": 3650
+        }
       }
     }
   ]
 }
 ```
 
-Or trigger by percentage of the model's context window (`"pruneAt": "35%"` or `"pruneAt": "350k"`):
+#### 🔄 How the 2-Stage `"350k"` Lifecycle Works in Practice
+
+1. **Stage 1 — Continuous Pruning First (Keep Context Under `350k` Without Resetting Memory):**
+   - As your session grows (or even if you install the plugin on an existing **`650k+` token** session), OpenCode Trim first prunes old read-only tool outputs (`shell`, `read`, `grep`, `glob`, `webfetch`, `<prefix>_search|zoom|outline...`) and unsigned historical reasoning traces into the recoverable SQLite `tool_vault` (`<trim-ref id="trm_..." />`), while protecting the last 14 messages and active diagnostics.
+   - **65% (`~227k` tokens):** Soft pruning begins.
+   - **85% (`~297k` tokens):** Force-band pruning reclaims older tool outputs.
+   - **94% (`~329k` tokens):** Critical-band pruning reclaims maximum eligible tool mass.
+   - If pruning brings a `650k` session back down below `350k` (e.g. to `~180k–220k`), **compaction is skipped** so your conversation history is not reset.
+2. **Stage 2 — Automatic Compaction Fallback (`autoCompact: true`):**
+   - When plain conversation text alone fills `350k+` tokens (so even **after** pruning all eligible old tool outputs, the remaining context still meets or exceeds `maxTokens`), OpenCode Trim automatically triggers `ctx.session.compact({ sessionID, delivery: "queue" })` (with a 3-layer `inFlight` + 3-turn cooldown + message-count hysteresis guard so it never loops).
+   - With `"background": true` in OpenCode's `"compaction"` block, compaction runs quietly in the background without interrupting your active screen.
+
+### 🎛️ Simple Options Reference
+
+You only need to enter the exact **token count** (e.g. `"350k"` or `350000`) or **`% used`** (e.g. `"35%"`) you see on the OpenCode `Context` screen — no manual reserve or ratio math required:
 
 | Simple Option | Default | Examples | What It Does |
 | :--- | :---: | :--- | :--- |
 | `maxTokens` | `"350k"` (`350000`) | `"350k"`, `"250k"`, `350000`, `0` | Direct target context ceiling matching the OpenCode `Context` token counter (`0` = uncapped model limit). |
 | `pruneAt` | — | `"350k"`, `"35%"`, `35`, `0.35` | Direct threshold by token count (`"350k"`) or percentage of model window (`"35%"`). |
 | `autoCompact` | `true` | `true` / `false` | 2-stage automatic guarantee: prunes eligible old tool/reasoning outputs first, then triggers `ctx.session.compact({ sessionID, delivery: "queue" })` if post-prune context still reaches `maxTokens`. |
-| `tui.enabled` | `false` | `true` / `false` | Show the compact `Trim` sidebar widget in the OpenCode TUI. |
-| `memory.enabled` | `false` | `true` / `false` | Enable the SQLite FTS5 compaction archive (`trim_history_search`) and recoverable pruning vault (`trim_expand`). |
+| `compactionInputPruning` | `false` (Recommended: `true`) | `true` / `false` | Also prune old tool outputs from native compaction summarization inputs so compaction summaries finish faster and cleaner. |
+| `tui.enabled` | `false` (Recommended: `true`) | `true` / `false` | Show the compact `Trim` sidebar widget in the OpenCode TUI. |
+| `memory.enabled` | `false` (Recommended: `true`) | `true` / `false` | Enable the SQLite FTS5 compaction archive (`trim_history_search`) and recoverable pruning vault (`trim_expand`). |
 
 ### 🔧 Advanced Engine Options (Optional)
 
