@@ -91,7 +91,7 @@ const STATUS_KEYWORD = /timed out|killed|interrupted|cancell?ed|terminated|timeo
 function statusNotice(text) { return STATUS_KEYWORD.test(text) && eachLine(text, (l) => l.length < 240 && STATUS_NOTICE.test(l)); }
 /** Own-data reader that never invokes accessors or traps. */
 const INSTRUCTION_PATH = /(?:^|[/\\])(?:AGENTS|PROTOCOL|CLAUDE|GEMINI|SECURITY|POLICY|INSTRUCTIONS|CONTRIBUTING|README|SKILL)\.md$|(?:^|[/\\])(?:opencode|plugin|secrets)\.jsonc?$|(?:^|[/\\])(?:\.npmrc|\.netrc|id_(?:rsa|ed25519|ecdsa|dsa)(?:_sk)?)$|(?:^|[/\\])\.env(?:\.[^/\\]+)?$/i;
-const SAFE_SHELL = /^\s*(?:(?:cd|ls|pwd|echo|cat|nl|sed|seq|date|grep|rg|find|head|tail|wc|tree|stat|sqlite3\s+-readonly|openspec\s+(?:validate|list|show|status|view)|node\s+(?:--(?:import|loader|conditions|no-warnings|experimental-\S+)\s+\S+\s+)*--test|git\s+(?:(?:-C|--git-dir|--work-tree)\s+\S+\s+)*(?:--no-pager\s+)*(?:status|log|branch|diff\s+--stat)|npm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|pnpm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|bun\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|cargo\s+(?:test|check|build|clippy)|pytest|vitest|jest|tsc|eslint|biome)\b)/i;
+const SAFE_SHELL = /^\s*(?:(?:cd|ls|pwd|echo|cat|nl|sed|seq|date|grep|rg|find|head|tail|wc|tree|stat|file|which|uname|sqlite3\s+-readonly|node\s+(?:--(?:import|loader|conditions|no-warnings|experimental-\S+)\s+\S+\s+)*--test|git\s+(?:(?:-C|--git-dir|--work-tree)\s+\S+\s+)*(?:--no-pager\s+)*(?:status|log|branch|diff\s+--stat)|npm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|pnpm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|bun\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|cargo\s+(?:test|check|build|clippy)|pytest|vitest|jest|tsc|eslint|biome|[a-z][a-z0-9_-]{1,31}\s+(?:validate|status|list|show|view|info|doctor|--version|--help))\b)/i;
 const MUTATING_JS_API = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rmSync|rmdir(?:Sync)?|unlink(?:Sync)?|rename(?:Sync)?|copyFile(?:Sync)?|cpSync|mkdir(?:Sync)?|chmod(?:Sync)?|chown(?:Sync)?|truncate(?:Sync)?|createWriteStream|child_process|exec(?:Sync|File|FileSync)?|spawn(?:Sync)?|fork|fetch)\b/;
 function isReadOnlyInlineEval(seg) {
     const trimmed = seg.trim();
@@ -464,8 +464,11 @@ function messageTokensImpl(msg) {
     }
     return tokens;
 }
+const READONLY_TOOL_SUFFIX = /^(?:[a-z][a-z0-9]{1,24}[_-])(?:read|grep|glob|ls|list|search|find|zoom|outline|inspect|view|lookup|symbols?|references|definitions?|callers|callees|imports|tree|stat)$/i;
 function eligibleTool(name, opts) {
-    return name && opts.pruneEligibleTools.includes(name) && !PROTECTED_NAME.test(name) && !WRITE_NAME.test(name);
+    if (!name || PROTECTED_NAME.test(name) || WRITE_NAME.test(name))
+        return false;
+    return opts.pruneEligibleTools.includes(name) || READONLY_TOOL_SUFFIX.test(name);
 }
 const GIT_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--super-prefix', '--config-env', '--attr-source']);
 const PATCH_FLAG = /^(?:--(?:patch|patch-with-stat|patch-with-raw|cc|remerge-diff|diff-merges|word-diff|color-words|full-diff|unified|textconv|ext-diff)(?:=|$)|-(?:[A-Za-z0-9]*[pucm]|L|U\d*)(?:\W|\w|$))/;

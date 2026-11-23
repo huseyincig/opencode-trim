@@ -70,7 +70,7 @@ export const DEFAULTS = Object.freeze({
   keepRecentToolResults: 12,
   pruneAfterToolChars: 100000,
   pruneMinResultChars: 800,
-  pruneEligibleTools: ["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find", "aft_search", "aft_zoom", "aft_outline", "aft_imports", "aft_callers", "aft_callees", "webfetch"],
+  pruneEligibleTools: ["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find", "webfetch"],
   pressureStartRatio: 0.65,
   pressureForceRatio: 0.85,
   pressureCriticalRatio: 0.94,

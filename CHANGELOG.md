@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1 — 2026-11-23
+
+- **Plugin-Agnostic Read-Only Tool & CLI Subcommand Matching (`src/prune.ts`, `src/config.ts`)**:
+  - Replaced hardcoded third-party tool/CLI names with generic, plugin-agnostic read-only suffix matching (`<prefix>_search|read|grep|glob|list|find|zoom|outline|inspect|view|lookup|symbols|references|definition|callers|callees|imports|tree|stat`) in `eligibleTool()` and generic read-only CLI subcommand matching (`validate`, `status`, `list`, `show`, `view`, `info`, `doctor`, `--version`, `--help`) in `SAFE_SHELL`.
+  - Kept `DEFAULTS.pruneEligibleTools` strictly limited to standard core tool names (`["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find", "webfetch"]`).
+
 ## 0.8.0 — 2026-11-23
 
 - **Out-of-the-Box `350k` Default & Screen-Matched Simple Configuration (`src/config.ts`, `src/pressure.ts`, `README.md`)**:
@@ -9,19 +15,19 @@
 - **Combined V2 `type: "tool"` `state.content` + `state.metadata.output` & `msg.type: "assistant"` Pruning (`src/prune.ts`, `src/cache.ts`)**:
   - Added full pruning and `ContextCache.toolChars` support for combined V2 `type: "tool"` parts whose output resides in `state.content: [{ type: "text", text: "..." }]` and is mirrored in `state.metadata.output`.
   - Updated `candidates()` to recognize `msg.type === "assistant"` alongside `msg.role === "assistant"` when pruning historical `reasoning` / `thinking` traces.
-- **Expanded Read-Only Shell & Code-Navigation Eligibility (`src/prune.ts`, `src/config.ts`)**:
-  - Added safe read-only `node -e` / `bun -e` inline inspection scripts (rejecting any mutating FS/process/network APIs or protected files), `node ... --test`, `sqlite3 -readonly`, `seq`, `date`, and `$?` exit-status checks to `readOnlyCommand()`.
-  - Added read-only code navigation tools (`aft_search`, `aft_zoom`, `aft_outline`, `aft_imports`, `aft_callers`, `aft_callees`, `webfetch`) to `DEFAULTS.pruneEligibleTools`.
+- **Expanded Read-Only Shell & Generic Read-Only Tool Eligibility (`src/prune.ts`, `src/config.ts`)**:
+  - Added safe read-only `node -e` / `bun -e` inline inspection scripts (rejecting any mutating FS/process/network APIs or protected files), `node ... --test`, `sqlite3 -readonly`, `seq`, `date`, `$?` exit-status checks, and generic read-only CLI subcommands (`validate`, `status`, `list`, `show`, `view`, `info`, `doctor`, `--version`, `--help`) to `readOnlyCommand()`.
+  - Added `webfetch` to `DEFAULTS.pruneEligibleTools` and generic plugin-agnostic read-only tool suffix matching (`*_search`, `*_read`, `*_grep`, `*_glob`, `*_list`, `*_find`, `*_zoom`, `*_outline`, `*_inspect`, `*_view`, `*_lookup`, `*_symbols`, `*_references`, `*_definition`, `*_callers`, `*_callees`, `*_imports`, `*_tree`, `*_stat`) in `eligibleTool()`.
 - **Verification**: **`508 / 508`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked, and verified against a real `681k`-token (`775`-message) OpenCode V2 session (`413` items / `1.58 MB` + `700 KB` duplicate metadata output reclaimed in one pass).
 
 ## 0.7.3 — 2026-11-23
 
 - **`contextWindowCap` vs. Large `model.output` Reserve Fix & V2 `step-finish` Token Calibration (`src/pressure.ts`, `src/plugin.ts`)**:
-  - Bounded `model.output` contribution to `reserve` at `Math.floor(context * 0.25)` so models with large output limits (e.g. `deepseek-v4.1-flash` with `context: 1000000, output: 384000`) combined with `contextWindowCap` (e.g. `350000`) always compute valid `usableTokens` (`262,500`) and pressure `ratio` instead of returning `undefined`.
+  - Bounded `model.output` contribution to `reserve` at `Math.floor(context * 0.25)` so models with large output limits (e.g. `context: 1000000, output: 384000`) combined with `contextWindowCap` (e.g. `350000`) always compute valid `usableTokens` and pressure `ratio` instead of returning `undefined`.
   - Extended `extractMsgReportedTokens()` to read provider token counts from `msg.info.tokens`/`usage` and V2 `step-finish` parts (`input + output + reasoning + cache.read + cache.write`), and recorded the calibrated token count in `contextStats`.
 - **Compound Read-Only Shell Pruning (`src/prune.ts`, `test/synthesis-upgrades.test.ts`)**:
   - Updated `readOnlyCommand()` to strip harmless descriptor merges (`2>&1`, `1>&2`, `>/dev/null`, `2>/dev/null`), split top-level `&&` / `|` / `;` segments via `splitSegments()`, and validate each segment independently against `SAFE_SHELL` and `!mutatingArgs()`.
-  - Added `cd`, `cat`, `nl`, `sed` (rejecting `-i`/`--in-place`/`-f`/`--file` and `w` write commands), `openspec validate|list|show|status|view`, and `git -C <dir> ...` to `SAFE_SHELL`, while continuing to block mutating compound commands, file redirects, and instruction/secret files (`protectedShell`).
+  - Added `cd`, `cat`, `nl`, `sed` (rejecting `-i`/`--in-place`/`-f`/`--file` and `w` write commands), generic read-only CLI subcommands, and `git -C <dir> ...` to `SAFE_SHELL`, while continuing to block mutating compound commands, file redirects, and instruction/secret files (`protectedShell`).
 - **Verification**: **`505 / 505`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
 
 ## 0.7.2 — 2026-11-23

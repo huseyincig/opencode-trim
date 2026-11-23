@@ -1134,11 +1134,11 @@ test('Step 13a: estimateRequest bounds model.output when contextWindowCap is sma
 
 test('Step 13b: pruneContext prunes read-only chained/piped/2>&1 shell commands while blocking mutating and secret commands', () => {
   const safeCommands = [
-    "cd /opt/hhc-workspace/opencode-hi && sed -n '240,560p' src/index.ts",
-    'cd /opt/hhc-workspace/opencode-hi && grep -R "token" src/ | head -n 40',
-    'openspec validate --strict 2>&1',
+    "cd /opt/workspace/project && sed -n '240,560p' src/index.ts",
+    'cd /opt/workspace/project && grep -R "token" src/ | head -n 40',
+    'mycli validate --strict 2>&1',
     'cat src/app.ts | nl -ba | head -n 30',
-    'git -C /opt/hhc-workspace/opencode-hi status --short 2>&1',
+    'git -C /opt/workspace/project status --short 2>&1',
   ];
 
   const opts = parseOptions({
@@ -1161,10 +1161,10 @@ test('Step 13b: pruneContext prunes read-only chained/piped/2>&1 shell commands 
   }
 
   const unsafeOrProtectedCommands = [
-    "cd /opt/hhc-workspace/opencode-hi && sed -i 's/foo/bar/g' src/index.ts",
-    'cd /opt/hhc-workspace/opencode-hi && rm -rf dist',
+    "cd /opt/workspace/project && sed -i 's/foo/bar/g' src/index.ts",
+    'cd /opt/workspace/project && rm -rf dist',
     'cat src/app.ts > /tmp/out.txt',
-    "cd /opt/hhc-workspace/opencode-hi && sed -n '1,20p' .env",
+    "cd /opt/workspace/project && sed -n '1,20p' .env",
     'cat AGENTS.md | head -n 20',
   ];
 
@@ -1261,7 +1261,7 @@ test('Step 14b: pruneContext & ContextCache prune combined V2 type="tool" parts 
   assert.equal(messages[0].content[1].state.metadata.output, PRUNED);
 });
 
-test('Step 14c: pruneContext prunes read-only node -e, node --test, sqlite3 -readonly, echo exit=$?, and aft_search/aft_zoom while blocking mutating node -e', () => {
+test('Step 14c: pruneContext prunes read-only node -e, node --test, sqlite3 -readonly, echo exit=$?, and generic read-only plugin tools while blocking mutating node -e', () => {
   const safeShells = [
     'node -e \'const fs=require("fs"); console.log(fs.readFileSync("src/index.ts","utf8").slice(0,500));\'',
     'node --input-type=module -e \'const m = await import("./dist/index.js"); console.log(Object.keys(m));\'',
@@ -1288,15 +1288,15 @@ test('Step 14c: pruneContext prunes read-only node -e, node --test, sqlite3 -rea
     assert.ok(res.pruned > 0, `expected read-only command to be pruned: ${command}`);
   }
 
-  for (const toolName of ['aft_search', 'aft_zoom']) {
+  for (const toolName of ['code_search', 'symbol_zoom', 'ast_outline', 'dep_imports']) {
     const messages: any[] = [];
     for (let i = 0; i < 10; i++) {
       messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: toolName, input: { query: 'foo' } }] });
       messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: toolName, result: { type: 'text', value: `hit ${i}\n` + 'x'.repeat(2500) } }] });
     }
-    const event = { sessionID: 's-aft', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+    const event = { sessionID: 's-ro-tool', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
     const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.95, usableTokens: 15000 } });
-    assert.ok(res.pruned > 0, `expected ${toolName} to be eligible for pruning`);
+    assert.ok(res.pruned > 0, `expected generic read-only tool ${toolName} to be eligible for pruning`);
   }
 
   const unsafeNodeCommands = [
