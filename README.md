@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/opencode-trim?color=blue&logo=npm&logoColor=white)](https://www.npmjs.com/package/opencode-trim)
 [![OpenCode: V2 (>=2.3.0)](https://img.shields.io/badge/OpenCode-V2%20(%3E%3D2.3.0)-10b981?logo=terminal&logoColor=white)](https://opencode.ai)
 [![V2 host baseline](https://img.shields.io/badge/Host%20baseline-v2.3.2%20verified-10b981?logo=checkmarx&logoColor=white)](AUDIT.md)
-[![Tests: 508/508 Passing](https://img.shields.io/badge/Tests-508%2F508%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
+[![Tests: 513/513 Passing](https://img.shields.io/badge/Tests-513%2F513%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
 [![Node.js](https://img.shields.io/badge/node-%5E26.0.0-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -18,16 +18,16 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 
 ## 📊 Verification & Live Acceptance
 
-> OpenCode Trim **v0.8.1** was verified on **23 November 2026** against **OpenCode V2 (`>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
+> OpenCode Trim **v0.9.0** was verified on **23 November 2026** against **OpenCode V2 (`>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
 
-- **Current Automated Verification:** **508 / 508** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, recoverable vault, and TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
+- **Current Automated Verification:** **513 / 513** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, recoverable vault, 2-stage auto-compaction fallback, and TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
 - **Deterministic Compression & Pruning Benchmark (`npm run bench`):**
   - **24 Command Families:** `1,801,616 B` input → `2,483 B` output (`≈99.86%` reduction on the adversarial progress/noise corpus, `allChanged: true`, per-family median **0.04–0.20 ms** with RAM LRU memoization).
   - **Context Pruning:** `388 / 400` eligible historical tool results pruned (`757,266` characters / `≈252,422` estimated tokens reclaimed, median `≈7 ms`).
 - **Packed Tarball & Dual-Runtime Verification:** `npm pack` `.tgz` artifact verified in isolated Node **26.13.1** and Bun **1.4.4** sandboxes across `.`, `./tui`, `./rpc`, `./core`, `./prune`, and `./pressure` entrypoints.
 - **Live OpenCode V2 Host Acceptance:** Verified plugin load, `tool.execute.after` shell compression, `session.context` pruning, real-provider compression/pruning (`opencode-go/deepseek-v4.1-flash` and `opencode-go/beam-free`), SQLite FTS5 compaction archiving & `trim_history_search`, multi-location fail-closed isolation, and TUI sidebar rendering across 80–200 column widths.
 
-Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.8.1 release notes](CHANGELOG.md) for the latest changes.
+Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.9.0 release notes](CHANGELOG.md) for the latest changes.
 
 ---
 
@@ -42,14 +42,14 @@ Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for repr
 - **Compact Guardian-Grade TUI Sidebar (`./tui`):** Opt-in (`tui.enabled: true`), borderless `sidebar.content` widget featuring `▶` / `▼` disclosure, two-column `StatRow` metrics, host-native context usage (`input + cache.read` over catalog limit), persisted compaction-history fallback after server restarts, and RPC-first probing with bounded hidden retries.
 - **Optional SQLite FTS5 Compaction Memory (`memory.enabled: true`):** Default-off Phase 1 & 1.1 archive using Node 26 built-in `node:sqlite` + FTS5. Observes native compaction summaries, scrubs secrets fail-closed (`[REDACTED]`), enforces composite `UNIQUE(project, event_id)` isolation, and exposes section-aware `trim_history_search` (`codemode: false`).
 - **Universal V2 Plugin Mesh Bridge (`src/bridge.ts`):** Zero-dependency N-way interoperability (`BRIDGE_REVISION: 2.3.1`) with sibling OpenCode V2 plugins: honors `isTrimMeshProtected` and cryptographic provenance tokens (`verifyMeshMetadata`), skips already-bounded outputs (`wasMeshBounded`), stamps `boundedBy: "opencode-trim"`, and cleans up session state on `session.deleted`.
-- **Smart Context Cap, Token Calibration & Lossless Vault (`trim_expand`):** Supports `contextWindowCap` for 1M+ models, provider-reported token calibration, compaction-boundary cache reset, structural cleaners (`scrubBlobs`, `filterDebugLogs`, `collapseStackTraces`, `collapseTablePadding`, `collapseRepetitionLoops`) with bounded RAM LRU memoization, `pruneHistoricalReasoning`, `pruneUnrelatedDiagnostics`, `purgeErrorInputs`, `ToolDedupeRing`, and a secret-redacted SQLite `vault` (`trim_expand` with line-range & `grep` slicing).
+- **Smart Context Cap, 2-Stage Auto-Compact Fallback, Token Calibration & Lossless Vault (`trim_expand`):** Supports `contextWindowCap` (`"350k"` out-of-the-box default) for 1M+ models, 2-stage automatic compaction fallback (`autoCompact: true` — prunes first, then triggers `ctx.session.compact({ sessionID, delivery: "queue" })` with in-flight/cooldown loop protection if post-prune context still reaches `maxTokens`), post-prune provider-reported token calibration, start-band (`65%`) prompt-cache admission unlocking, signed reasoning/thinking block protection (`signature`, `thought_signature`, `encrypted_content`), historical JSON/XML/HTML pruning, compaction-boundary cache reset, structural cleaners (`scrubBlobs`, `filterDebugLogs`, `collapseStackTraces`, `collapseTablePadding`, `collapseRepetitionLoops`) with bounded RAM LRU memoization, `pruneHistoricalReasoning`, `pruneUnrelatedDiagnostics`, `purgeErrorInputs`, `ToolDedupeRing`, and a secret-redacted SQLite `vault` (`trim_expand` with ref discovery, line-range & bounded regex `grep` slicing).
 - **Strict TypeScript & Zero Runtime Dependencies:** Pure strict TypeScript (`src/*.ts`, `src/tui.tsx`) compiled to `dist/*.js` + `.d.ts` targeting Node.js 26 Active LTS (`^26.0.0`) with zero external runtime dependencies.
 
 ---
 
 ## 📦 Installation
 
-The current version is **0.8.1** (OpenCode **V2 `>=2.3.0`**, Node.js **`^26.0.0`**).
+The current version is **0.9.0** (OpenCode **V2 `>=2.3.0`**, Node.js **`^26.0.0`**).
 
 OpenCode Trim supports **Global**, **Project-Local**, **`.opencode/plugins/` Local Wrapper / Symlink**, **Local Development (`file://`)**, and **Remote TUI Client (`cli.json`)** installation modes.
 
@@ -76,7 +76,7 @@ Or pin an exact version and configure optional features (such as the TUI sidebar
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     [
-      "opencode-trim@0.8.1",
+      "opencode-trim@0.9.0",
       {
         "maxTokens": "350k",
         "tui": {
@@ -295,13 +295,13 @@ Because OpenCode V2 auto-discovers `./tui` from `package.json`, the sidebar uses
 ### 🔽 Collapsed View (Default)
 
 ```text
-▶ Trim                     v0.8.1
+▶ Trim                     v0.9.0
 Context              74% (740k/1M)
 Savings           -106k | 12 drops
 Memory                 4 summaries
 ```
 
-- **Header:** Clickable disclosure header (`▶ Trim` / `▼ Trim`), current version (`v0.8.1`), and status marker (`!` when stale, `?` before first snapshot).
+- **Header:** Clickable disclosure header (`▶ Trim` / `▼ Trim`), current version (`v0.9.0`), and status marker (`!` when stale, `?` before first snapshot).
 - **Context:** Host-native token usage (`input + cache.read` from the last assistant turn after any completed compaction) over the model catalog limit, falling back to Trim's `~`-prefixed estimate only when native usage is unavailable.
 - **Savings:** Total characters saved across shell compression, list filtering, and context pruning (`Idle` when zero).
 - **Memory:** Displayed in collapsed view only when the optional FTS5 memory store is active or reporting an error.
@@ -311,7 +311,7 @@ Memory                 4 summaries
 Clicking the `▶ Trim` header expands the full operational breakdown:
 
 ```text
-▼ Trim                     v0.8.1
+▼ Trim                     v0.9.0
 Context
 74%                      740k/1M
 Optimization
@@ -392,6 +392,7 @@ Or trigger by percentage of the model's context window (`"pruneAt": "35%"` or `"
 | :--- | :---: | :--- | :--- |
 | `maxTokens` | `"350k"` (`350000`) | `"350k"`, `"250k"`, `350000`, `0` | Direct target context ceiling matching the OpenCode `Context` token counter (`0` = uncapped model limit). |
 | `pruneAt` | — | `"350k"`, `"35%"`, `35`, `0.35` | Direct threshold by token count (`"350k"`) or percentage of model window (`"35%"`). |
+| `autoCompact` | `true` | `true` / `false` | 2-stage automatic guarantee: prunes eligible old tool/reasoning outputs first, then triggers `ctx.session.compact({ sessionID, delivery: "queue" })` if post-prune context still reaches `maxTokens`. |
 | `tui.enabled` | `false` | `true` / `false` | Show the compact `Trim` sidebar widget in the OpenCode TUI. |
 | `memory.enabled` | `false` | `true` / `false` | Enable the SQLite FTS5 compaction archive (`trim_history_search`) and recoverable pruning vault (`trim_expand`). |
 
@@ -406,6 +407,7 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 | `toolFiltering` | `true` | `boolean` | Fold consecutive identical lines in `grep`, `glob`, `ls`, `list`, `find`. |
 | `pruning` | `true` | `boolean` | Prune old, safe, completed tool outputs from outgoing model context. |
 | `compactionInputPruning` | `false` | `boolean` | Also prune old tool outputs from native compaction request inputs. |
+| `autoCompact` | `true` | `boolean` | Trigger `ctx.session.compact({ sessionID, delivery: "queue" })` with in-flight/cooldown loop protection when post-prune context still reaches `usableTokens`. |
 | `minOutputChars` | `1600` | `200..200000` | Minimum tool output length before compression runs. |
 | `minSavingsRatio` | `0.15` | `0..0.9` | Minimum relative character reduction required to accept compression. |
 | `maxOutputLines` | `160` | `20..2000` | Maximum lines allowed in a compressed shell output. |
@@ -444,8 +446,8 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 Run the full verification suite locally:
 
 ```bash
-npm run check     # Strict tsc --noEmit, dist/ build, 94-file syntax check + 500 tests
-npm test          # Node.js test runner (500 tests across 28 suites)
+npm run check     # Strict tsc --noEmit, dist/ build, 94-file syntax check + 513 tests
+npm test          # Node.js test runner (513 tests across 28 suites)
 npm run bench     # Deterministic 24-family compression & 800-message pruning benchmark
 npm run pack:dry  # Verify packed npm tarball contents (147 files)
 ```

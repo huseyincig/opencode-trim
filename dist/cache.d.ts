@@ -7,6 +7,7 @@ export interface CacheSessionEntry {
     identity: string;
     plannedDrops: Set<string>;
     sizeMark?: number;
+    startBandAdmitted?: boolean;
 }
 export declare function requestIdentity(event: any): string;
 /**

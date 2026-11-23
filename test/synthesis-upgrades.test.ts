@@ -1316,3 +1316,258 @@ test('Step 14c: pruneContext prunes read-only node -e, node --test, sqlite3 -rea
     assert.equal(res.pruned, 0, `expected mutating/secret node -e NOT to be pruned: ${command}`);
   }
 });
+
+test('Step 15a: estimateRequest subtracts pruned characters from historical reportedTokens so post-prune ratio drops accurately', () => {
+  const opts = parseOptions({
+    maxTokens: '350k',
+    pruneAfterToolChars: 20000,
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneMinResultChars: 500,
+  });
+  const catalog = new Map([['p/m', { context: 1_000_000, output: 384_000 }]]);
+  const messages: any[] = [];
+  for (let i = 0; i < 20; i++) {
+    messages.push({
+      id: `m-${i}`,
+      type: 'assistant',
+      content: [
+        {
+          type: 'tool',
+          callID: `c-${i}`,
+          tool: 'shell',
+          state: {
+            status: 'completed',
+            input: { command: 'grep -rn "pattern" src/' },
+            content: [{ type: 'text', text: `grep output ${i}\n` + 'x'.repeat(60_000) }],
+          },
+        },
+      ],
+      ...(i === 19 ? { info: { role: 'assistant', tokens: { input: 650_000, output: 15_000 } } } : {}),
+    });
+  }
+  const event = { sessionID: 's-ghost-tokens', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+  const pre = estimateRequest(event, catalog, opts);
+  assert.equal(pre.reportedTokens, 665_000);
+  assert.ok(pre.ratio! > 1.8, `expected pre-prune ratio > 1.8, got ${pre.ratio}`);
+
+  const pruned = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: pre });
+  assert.ok(pruned.pruned >= 15, `expected >= 15 tool outputs pruned, got ${pruned.pruned}`);
+  assert.ok(pruned.removedChars >= 900_000, `expected >= 900k chars removed, got ${pruned.removedChars}`);
+
+  const post = estimateRequest(event, catalog, opts);
+  // 900k+ chars (~300k+ tokens) were pruned from messages at or before the reported assistant message,
+  // so post.reportedTokens and post.ratio must drop below 1.0 (350k)!
+  assert.ok(post.reportedTokens! < 350_000, `expected post.reportedTokens < 350000, got ${post.reportedTokens}`);
+  assert.ok(post.ratio! < 1.0, `expected post.ratio < 1.0 after pruning 1MB+, got ${post.ratio}`);
+});
+
+test('Step 15b: ContextCache unlocks allowNewDrops when crossing pressureStartRatio (65%) from below, without churning inside the band', () => {
+  const opts = parseOptions({ pruneAfterToolChars: 500_000 });
+  const cache = new ContextCache();
+  const event = {
+    sessionID: 's-band-crossing',
+    model: { providerID: 'p', id: 'm' },
+    tools: {},
+    system: [],
+    messages: [{ id: 'm1', role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+  };
+  // Turn 1: low pressure (20%) — initial turn admits once
+  const g1 = cache.begin(event, opts, { ratio: 0.20 });
+  assert.equal(g1.allowNewDrops, true);
+  g1.finish([]);
+
+  // Turn 2: still below 65% (50%) — no new drops
+  const g2 = cache.begin(event, opts, { ratio: 0.50 });
+  assert.equal(g2.allowNewDrops, false);
+
+  // Turn 3: crosses pressureStartRatio (65%) for the first time (68%) — MUST unlock allowNewDrops!
+  const g3 = cache.begin(event, opts, { ratio: 0.68 });
+  assert.equal(g3.allowNewDrops, true, 'crossing pressureStartRatio (65%) from below must unlock allowNewDrops');
+  g3.finish(['k1']);
+
+  // Turn 4: stays inside start band (74%) — must NOT churn prompt cache
+  const g4 = cache.begin(event, opts, { ratio: 0.74 });
+  assert.equal(g4.allowNewDrops, false, 'subsequent turn inside start band must keep prompt cache stable');
+
+  // Turn 5: crosses pressureForceRatio (85%) — unlocks allowNewDrops
+  const g5 = cache.begin(event, opts, { ratio: 0.86 });
+  assert.equal(g5.allowNewDrops, true);
+});
+
+test('Step 15c: pruneContext protects cryptographically signed reasoning/thinking blocks while pruning unsigned reasoning', () => {
+  const opts = parseOptions({
+    pruneAfterToolChars: 10000,
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneMinResultChars: 200,
+  });
+  const messages: any[] = [
+    {
+      id: 'm-signed-anthropic',
+      role: 'assistant',
+      content: [
+        { type: 'thinking', text: 'signed anthropic thought '.repeat(30), signature: 'sig_anthropic_12345' },
+      ],
+    },
+    {
+      id: 'm-signed-gemini',
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', text: 'signed gemini thought '.repeat(30), thought_signature: 'sig_gemini_67890' },
+      ],
+    },
+    {
+      id: 'm-signed-openai',
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', id: 'rs_0123456789abcdef', text: 'signed openai responses thought '.repeat(30), encrypted_content: 'enc_blob' },
+      ],
+    },
+    {
+      id: 'm-signed-provider-meta',
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', text: 'signed providerMeta thought '.repeat(30), providerMetadata: { google: { thoughtSignature: 'sig_meta_999' } } },
+      ],
+    },
+    {
+      id: 'm-unsigned',
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', text: 'unsigned historical thought '.repeat(30) },
+      ],
+    },
+    { id: 'm-tail-1', role: 'user', content: [{ type: 'text', text: 'tail 1 '.repeat(600) }] },
+    { id: 'm-tail-2', role: 'assistant', content: [{ type: 'text', text: 'tail 2' }] },
+    { id: 'm-tail-3', role: 'user', content: [{ type: 'text', text: 'tail 3' }] },
+    { id: 'm-tail-4', role: 'assistant', content: [{ type: 'text', text: 'tail 4' }] },
+  ];
+  const event = { sessionID: 's-signed-thinking', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+  const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.90, usableTokens: 15000 } });
+  assert.equal(res.pruned, 1, 'only the unsigned reasoning block should be pruned');
+  assert.match(messages[0].content[0].text, /^signed anthropic thought/);
+  assert.match(messages[1].content[0].text, /^signed gemini thought/);
+  assert.match(messages[2].content[0].text, /^signed openai responses thought/);
+  assert.match(messages[3].content[0].text, /^signed providerMeta thought/);
+  assert.equal(messages[4].content[0].text, PRUNED_REASONING);
+});
+
+test('Step 15d: pruneContext prunes historical JSON, XML, and HTML tool outputs outside protected tail while keeping PEM keys untouched', () => {
+  const opts = parseOptions({
+    pruneAfterToolChars: 10000,
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneMinResultChars: 200,
+  });
+  const jsonPayload = JSON.stringify({ items: Array.from({ length: 80 }, (_, i) => ({ id: i, name: `item-${i}`, detail: 'value'.repeat(10) })) }, null, 2);
+  const htmlPayload = '<!doctype html><html><body>' + '<p>paragraph content</p>'.repeat(60) + '</body></html>';
+  const pemPayload = '-----BEGIN RSA PRIVATE KEY-----\n' + 'MIIBOgIBAAJBALRiMLAHudeSA/x3hB2f+2NRkJ'.repeat(25) + '\n-----END RSA PRIVATE KEY-----';
+
+  const messages: any[] = [
+    { id: 'a0', role: 'assistant', content: [{ type: 'tool-call', id: 'c0', name: 'read', input: { filePath: 'data/items.json' } }] },
+    { id: 'r0', role: 'tool', content: [{ type: 'tool-result', id: 'c0', name: 'read', result: { type: 'text', value: jsonPayload } }] },
+    { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'webfetch', input: { url: 'https://example.com' } }] },
+    { id: 'r1', role: 'tool', content: [{ type: 'tool-result', id: 'c1', name: 'webfetch', result: { type: 'text', value: htmlPayload } }] },
+    { id: 'a2', role: 'assistant', content: [{ type: 'tool-call', id: 'c2', name: 'shell', input: { command: 'echo key' } }] },
+    { id: 'r2', role: 'tool', content: [{ type: 'tool-result', id: 'c2', name: 'shell', result: { type: 'text', value: pemPayload } }] },
+    { id: 'a3', role: 'assistant', content: [{ type: 'tool-call', id: 'c3', name: 'shell', input: { command: 'echo recent1' } }] },
+    { id: 'r3', role: 'tool', content: [{ type: 'tool-result', id: 'c3', name: 'shell', result: { type: 'text', value: 'recent output 1 '.repeat(300) } }] },
+    { id: 'a4', role: 'assistant', content: [{ type: 'tool-call', id: 'c4', name: 'shell', input: { command: 'echo recent2' } }] },
+    { id: 'r4', role: 'tool', content: [{ type: 'tool-result', id: 'c4', name: 'shell', result: { type: 'text', value: 'recent output 2 '.repeat(300) } }] },
+  ];
+  const event = { sessionID: 's-json-html', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+  const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.92, usableTokens: 15000 } });
+  assert.equal(res.pruned, 2, 'historical JSON and HTML outputs should be pruned while PEM and recent output stay untouched');
+  assert.equal(messages[1].content[0].result.value, PRUNED);
+  assert.equal(messages[3].content[0].result.value, PRUNED);
+  assert.equal(messages[5].content[0].result.value, pemPayload);
+});
+
+test('Step 15e: setupTrim 2-stage autoCompact skips compaction when pruning brings 650k session below 350k, and triggers ctx.session.compact with loop guard when post-prune context still exceeds 350k', async () => {
+  const def = parseOptions();
+  assert.equal(def.autoCompact, true, 'autoCompact must be true out of the box');
+
+  const compactCalls: any[] = [];
+  let contextCb: any;
+  const ctx = {
+    options: {
+      maxTokens: '350k',
+      protectRecentMessages: 4,
+      protectRecentTokens: 1024,
+      keepRecentToolResults: 1,
+      pruneAfterToolChars: 20000,
+    },
+    model: {
+      list: async () => ({
+        data: [{ providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 384_000 } }],
+      }),
+    },
+    tool: { hook: async () => ({ dispose: async () => {} }) },
+    session: {
+      hook: async (name: string, fn: any) => {
+        if (name === 'context') contextCb = fn;
+        return { dispose: async () => {} };
+      },
+      compact: async (input: any) => {
+        compactCalls.push(input);
+        return { id: 'cmp-1' };
+      },
+    },
+  };
+
+  const stop = await setupTrim(ctx);
+
+  // Case 1: Pre-existing 665k session mostly made of prunable tool outputs (~1.2 MB).
+  // Stage 1 pruning drops it below 350k -> Stage 2 autoCompact MUST NOT fire!
+  const prunable665k: any[] = [];
+  for (let i = 0; i < 20; i++) {
+    prunable665k.push({
+      id: `p-${i}`,
+      type: 'assistant',
+      content: [
+        {
+          type: 'tool',
+          callID: `pc-${i}`,
+          tool: 'shell',
+          state: {
+            status: 'completed',
+            input: { command: 'grep -rn "x" src/' },
+            content: [{ type: 'text', text: `out ${i}\n` + 'x'.repeat(60_000) }],
+          },
+        },
+      ],
+      ...(i === 19 ? { info: { role: 'assistant', tokens: { input: 650_000, output: 15_000 } } } : {}),
+    });
+  }
+  await contextCb({ sessionID: 'ses-prunable', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages: prunable665k });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(compactCalls.length, 0, 'must NOT trigger compact when pruning already brought context below 350k');
+
+  // Case 2: Session where unprunable plain conversation text alone exceeds 350k (e.g. 420k tokens).
+  // Pruning runs first, sees post-prune context is STILL >= 350k -> Stage 2 triggers ctx.session.compact({ sessionID, delivery: "queue" })!
+  const unprunable420k: any[] = [];
+  for (let i = 0; i < 16; i++) {
+    unprunable420k.push({
+      id: `u-${i}`,
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: [{ type: 'text', text: `turn ${i}: ` + 'plain conversation text '.repeat(3500) }],
+      ...(i === 15 ? { info: { role: 'assistant', tokens: { input: 410_000, output: 10_000 } } } : {}),
+    });
+  }
+  await contextCb({ sessionID: 'ses-needs-compact', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages: unprunable420k });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(compactCalls.length, 1, 'must trigger ctx.session.compact when post-prune context still >= 350k');
+  assert.deepEqual(compactCalls[0], { sessionID: 'ses-needs-compact', delivery: 'queue' });
+
+  // Case 3: Immediate next turn on the same session while compaction is in-flight / within cooldown -> MUST NOT spam compact()!
+  await contextCb({ sessionID: 'ses-needs-compact', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages: unprunable420k });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(compactCalls.length, 1, 'in-flight/cooldown guard must prevent repeated compact triggers');
+
+  await stop();
+});
+

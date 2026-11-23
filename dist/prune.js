@@ -8,6 +8,7 @@ import { isProtectedCommand } from "./filters.js";
 import { splitSegments, shellWords, skipPrefixWords } from "./families/util.js";
 import { MAX_LINE, STACK as DIAG_STACK, SUMMARY as DIAG_SUMMARY, ANCHOR as DIAG_ANCHOR, CODE as DIAG_CODE, hasFailureText, parseExitCode } from "./diagnostics.js";
 import { isMeshProtectedPart, verifyMeshMetadata, MESH_SYMBOL, MESH_METADATA_KEY } from "./bridge.js";
+import { recordPrunedMsgChars } from "./pressure.js";
 export const PRUNED = '[opencode-trim: old tool output omitted from model context]';
 export const PRUNED_ERROR_INPUT = '[opencode-trim: oversized input of failed tool call omitted; error output preserved]';
 export const PRUNED_REASONING = '[opencode-trim: historical reasoning trace omitted]';
@@ -164,18 +165,41 @@ function fingerprint(s) { let h = 2166136261; for (let i = 0; i < s.length; i++)
     h = Math.imul(h ^ s.charCodeAt(i), 16777619); return (h >>> 0).toString(16); }
 function structured(text) {
     const s = text.trimStart();
-    if (/^(?:<\?xml|<!doctype|<html|<svg|-----BEGIN )/i.test(s) || text.includes('\x00'))
+    if (/^-----BEGIN /i.test(s) || text.includes('\x00'))
         return true;
-    if ((s.startsWith('{') || s.startsWith('['))) {
-        // Very large JSON is machine-readable by shape; do not pay a full parse to
-        // discover that, and never line-mangle it.
-        if (text.length > 1_000_000)
+    return false;
+}
+const REASONING_SIG_KEYS = ['signature', 'thought_signature', 'thoughtSignature', 'encrypted_content', 'redacted_thinking'];
+function hasReasoningSignature(part) {
+    if (!obj(part) || trapped(part))
+        return true;
+    for (const k of REASONING_SIG_KEYS) {
+        const v = data(part, k);
+        if (typeof v === 'string' && v.length > 0)
             return true;
-        try {
-            JSON.parse(s);
-            return true;
+    }
+    const id = data(part, 'id');
+    if (typeof id === 'string' && id.startsWith('rs_'))
+        return true;
+    for (const hKey of ['metadata', 'providerMetadata', 'providerOptions']) {
+        const holder = data(part, hKey);
+        if (!obj(holder) || trapped(holder))
+            continue;
+        for (const k of REASONING_SIG_KEYS) {
+            const v = data(holder, k);
+            if (typeof v === 'string' && v.length > 0)
+                return true;
         }
-        catch { /*plain text*/ }
+        for (const subKey of Object.keys(holder)) {
+            const sub = data(holder, subKey);
+            if (!obj(sub) || trapped(sub))
+                continue;
+            for (const k of REASONING_SIG_KEYS) {
+                const v = data(sub, k);
+                if (typeof v === 'string' && v.length > 0)
+                    return true;
+            }
+        }
     }
     return false;
 }
@@ -826,7 +850,7 @@ function candidates(event, opts) {
                 continue;
             const type = data(part, 'type');
             if ((type === 'reasoning' || type === 'thinking') && role === 'assistant' && opts.pruneHistoricalReasoning !== false) {
-                if (!trapped(part) && !hasMedia(part) && !isTrimMeshProtected(part, msg, event?.sessionID)) {
+                if (!trapped(part) && !hasMedia(part) && !hasReasoningSignature(part) && !isTrimMeshProtected(part, msg, event?.sessionID)) {
                     const field = typeof data(part, 'text') === 'string' ? 'text' : (typeof data(part, 'reasoning') === 'string' ? 'reasoning' : null);
                     const val = field ? data(part, field) : undefined;
                     if (field && typeof val === 'string' && val !== PRUNED_REASONING && val.length >= opts.pruneMinResultChars && writable(part, field)) {
@@ -1018,16 +1042,22 @@ export function pruneContext(event, options, settings = {}) {
             }
             if (e.length <= replacement.length)
                 continue;
+            const delta = e.length - replacement.length;
             e.accessor.set(replacement);
             committed.push(e);
-            removedChars += e.length - replacement.length;
+            removedChars += delta;
+            recordPrunedMsgChars(at(event.messages, e.mi), delta);
         }
     }
     catch (cause) {
         // A later plugin may have frozen a message; never leave a partial rewrite.
         for (const e of committed.reverse()) {
             try {
+                const cur = e.accessor.get();
+                const delta = typeof cur === 'string' ? Math.max(0, e.length - cur.length) : 0;
                 e.accessor.set(e.original);
+                if (delta > 0)
+                    recordPrunedMsgChars(at(event.messages, e.mi), -delta);
             }
             catch { /* immutable after commit */ }
         }

@@ -10,6 +10,7 @@ export interface CacheSessionEntry {
   identity: string;
   plannedDrops: Set<string>;
   sizeMark?: number;
+  startBandAdmitted?: boolean;
 }
 
 function hash(input: string): string {
@@ -92,8 +93,10 @@ export class ContextCache {
     const identity=requestIdentity(event);
     let entry=this.sessions.get(key);
     const changed=!entry||entry.identity!==identity;
+    const inStartBand=typeof pressure?.ratio==='number'&&pressure.ratio>=opts.pressureStartRatio;
+    let crossedStartBand=false;
     if(!entry){
-      entry={identity,plannedDrops:new Set()};
+      entry={identity,plannedDrops:new Set(),startBandAdmitted:inStartBand};
     }else if(changed){
       // A model/tool/system change is a natural provider-cache rebuild: it may
       // admit new decisions, but previously committed drops must keep replaying.
@@ -101,12 +104,21 @@ export class ContextCache {
       // prefix rewrite on every following request.
       entry.identity=identity;
       entry.sizeMark=undefined;
+      entry.startBandAdmitted=inStartBand;
+    }else{
+      if(!inStartBand){
+        entry.startBandAdmitted=false;
+      }else if(!entry.startBandAdmitted){
+        entry.startBandAdmitted=true;
+        crossedStartBand=true;
+      }
     }
     this.sessions.delete(key);this.sessions.set(key,entry);
     while(this.sessions.size>128)this.sessions.delete(this.sessions.keys().next().value as string);
     // Compaction is already a natural model request, whose history is about
     // to be checkpointed. Force pressure is a deliberate bounded cache bust.
-    let allowNewDrops=kind==='compaction'||changed||
+    // Crossing pressureStartRatio (65%) from below also admits once.
+    let allowNewDrops=kind==='compaction'||changed||crossedStartBand||
       (typeof pressure?.ratio==='number' && pressure.ratio>=opts.pressureForceRatio);
     // Absolute tool-output budget: admissible even when the ratio is unmeasurable.
     // Re-admission needs growth of a quarter budget since the last size admission,

@@ -472,6 +472,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   const dedupeRing=new ToolDedupeRing(opts.dedupeWindow,opts.minOutputChars);
   const workingState=new SessionWorkingState();
   const sessionPressure=new Map<string, number>();
+  const autoCompactState=new Map<string, { inFlight: boolean; triggeredAt: number; turnsSince: number; lastMsgCount: number }>();
   let activeVault: any = null;
   const registrations: Array<{ dispose: () => any }> = [];
   const sessionOf=(event: any): string | undefined => {const s=event?.sessionID;return typeof s==='string'&&s?s:undefined;};
@@ -494,10 +495,51 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
       const gate=cache.begin(event,opts,pressure,kind);
       const result=pruneContext(event,opts,{pressure,...gate,...(activeVault?{vault:activeVault}:{})});
       gate.finish(result.plannedIds);
+      const postPressure=(kind==='context'&&result.pruned>0)?estimateRequest(event,modelLimits,opts):pressure;
+      if(sid&&typeof postPressure.ratio==='number'){
+        sessionPressure.delete(sid);
+        if(sessionPressure.size>=128)sessionPressure.delete(sessionPressure.keys().next().value as string);
+        sessionPressure.set(sid,postPressure.ratio);
+      }
+      if(
+        opts.autoCompact!==false &&
+        kind==='context' &&
+        event?.kind!=='compaction' &&
+        event?.kind!=='title' &&
+        event?.kind!=='generate' &&
+        sid &&
+        typeof ctx?.session?.compact==='function' &&
+        !foreignEvent(event)
+      ){
+        const msgCount=Array.isArray(event?.messages)?event.messages.length:0;
+        const prev=autoCompactState.get(sid);
+        if(prev)prev.turnsSince+=1;
+        if(
+          typeof postPressure.ratio==='number' &&
+          Number.isFinite(postPressure.ratio) &&
+          postPressure.ratio>=1.0 &&
+          msgCount>opts.protectRecentMessages
+        ){
+          const now=Date.now();
+          const canTrigger=!prev || (
+            (!prev.inFlight || now-prev.triggeredAt>120_000) &&
+            (prev.turnsSince>=3 || msgCount<prev.lastMsgCount)
+          );
+          if(canTrigger){
+            autoCompactState.delete(sid);
+            if(autoCompactState.size>=128)autoCompactState.delete(autoCompactState.keys().next().value as string);
+            autoCompactState.set(sid,{inFlight:true,triggeredAt:now,turnsSince:0,lastMsgCount:msgCount});
+            Promise.resolve().then(()=>ctx.session.compact({sessionID:sid,delivery:'queue'})).catch(()=>{
+              const cur=autoCompactState.get(sid);
+              if(cur)cur.inFlight=false;
+            });
+          }
+        }
+      }
       observe((s: any)=>{
         if(foreignEvent(event))return;
         // A native compaction request is not the live model context; only its prune counters apply.
-        if(kind==='context')contextStats(event,result.pruned>0?estimateRequest(event,modelLimits,opts):pressure);
+        if(kind==='context')contextStats(event,postPressure);
         s.recordPrune({sessionID:sessionOf(event),pruned:result.pruned,removedChars:result.removedChars,
           reason:result.reason,allowNewDrops:gate.allowNewDrops});
       });
@@ -523,6 +565,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     dedupeRing.reset(sid);
     workingState.reset(sid);
     sessionPressure.delete(sid);
+    autoCompactState.delete(sid);
   };
   registrations.push({
     dispose:registerMeshPeer({
@@ -610,14 +653,21 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
                   dedupeRing.reset(sid);
                   workingState.reset(sid);
                   sessionPressure.delete(sid);
+                  autoCompactState.delete(sid);
                 }
                 continue;
+              }
+              if(e?.type==='session.compaction.failed'&&typeof sid==='string'&&sid){
+                const cur=autoCompactState.get(sid);
+                if(cur)cur.inFlight=false;
               }
               if(e?.type==='session.compaction.ended'&&typeof sid==='string'&&sid){
                 cache.resetSession(sid);
                 dedupeRing.reset(sid);
                 workingState.reset(sid);
                 sessionPressure.delete(sid);
+                const cur=autoCompactState.get(sid);
+                if(cur)cur.inFlight=false;
               }
               observe((s)=>{
                 const type=COMPACTION_EVENTS.includes(e?.type)?e.type.slice('session.compaction.'.length):null;
@@ -651,6 +701,8 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
           dedupeRing.reset(sid);
           workingState.reset(sid);
           sessionPressure.delete(sid);
+          const cur=autoCompactState.get(sid);
+          if(cur)cur.inFlight=false;
         },
       });
     }catch{memoryStop=null;activeVault=null;observe((s: any)=>{s.setMemoryProvider(null);s.setMemoryState({active:false,error:'setup-failed'});});}
@@ -658,7 +710,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   let disposed=false;
   return async()=>{
     if(disposed)return;
-    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();activeVault=null;
+    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();activeVault=null;
     if(memoryStop)await Promise.resolve().then(memoryStop).catch(()=>{});
     await Promise.allSettled(registrations.reverse().map(reg=>reg.dispose()));
     await dispose();

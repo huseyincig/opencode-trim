@@ -1,5 +1,18 @@
 /** Pure, deliberately conservative estimates; no claim of exact provider token accounting. */
 function obj(x) { return x !== null && typeof x === 'object'; }
+const PRUNED_MSG_CHARS = new WeakMap();
+export function recordPrunedMsgChars(msg, deltaChars) {
+    if (!obj(msg) || typeof deltaChars !== 'number' || !Number.isFinite(deltaChars) || deltaChars === 0)
+        return;
+    const next = (PRUNED_MSG_CHARS.get(msg) ?? 0) + deltaChars;
+    if (next > 0)
+        PRUNED_MSG_CHARS.set(msg, next);
+    else
+        PRUNED_MSG_CHARS.delete(msg);
+}
+export function getPrunedMsgChars(msg) {
+    return obj(msg) ? (PRUNED_MSG_CHARS.get(msg) ?? 0) : 0;
+}
 function asPositiveInt(n) { return typeof n === 'number' && Number.isSafeInteger(n) && n > 0 && n <= 10_000_000 ? n : undefined; }
 export function resolveModelLimit(event, modelLimits = new Map(), options = {}) {
     const direct = event?.model?.limit;
@@ -110,12 +123,14 @@ export function estimateRequest(event, modelLimits, options) {
     let mediaPresent = false;
     let lastReportedBase;
     let trailingAfterReported = 0;
+    let prunedCharsSoFar = 0;
     for (const part of event?.system ?? []) {
         const text = limitedStringify(part);
         estimatedChars += text.length;
         estimatedTokens += estimateTokens(text);
     }
     for (const msg of event?.messages ?? []) {
+        prunedCharsSoFar += getPrunedMsgChars(msg);
         let msgTokens = 12;
         if (typeof msg?.reasoning_content === 'string') {
             const rtext = msg.reasoning_content.slice(0, 600_000);
@@ -142,7 +157,8 @@ export function estimateRequest(event, modelLimits, options) {
         estimatedTokens += msgTokens;
         const reported = extractMsgReportedTokens(msg);
         if (reported !== undefined) {
-            lastReportedBase = reported;
+            const reclaimedTokens = Math.floor(prunedCharsSoFar / 3);
+            lastReportedBase = Math.max(0, reported - reclaimedTokens);
             trailingAfterReported = 0;
         }
         else if (lastReportedBase !== undefined) {

@@ -6,6 +6,7 @@ export const DEFAULTS = Object.freeze({
     toolFiltering: true,
     pruning: true,
     compactionInputPruning: false,
+    autoCompact: true,
     minOutputChars: 1600,
     minSavingsRatio: 0.15,
     maxOutputLines: 160,
@@ -165,7 +166,7 @@ export function parseOptions(options = {}) {
         if (parsed.ratioCap !== undefined)
             result.contextWindowRatioCap = parsed.ratioCap;
     }
-    for (const key of ['enabled', 'shell', 'toolFiltering', 'pruning', 'compactionInputPruning', 'purgeErrorInputs', 'pruneHistoricalReasoning', 'pruneUnrelatedDiagnostics']) {
+    for (const key of ['enabled', 'shell', 'toolFiltering', 'pruning', 'compactionInputPruning', 'autoCompact', 'purgeErrorInputs', 'pruneHistoricalReasoning', 'pruneUnrelatedDiagnostics']) {
         if (typeof result[key] !== 'boolean')
             throw new TypeError(`opencode-trim: ${key} must be boolean`);
     }

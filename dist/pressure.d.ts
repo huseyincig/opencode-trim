@@ -21,6 +21,8 @@ export interface PressureEstimate {
     mediaPresent: boolean;
     reportedTokens?: number;
 }
+export declare function recordPrunedMsgChars(msg: unknown, deltaChars: number): void;
+export declare function getPrunedMsgChars(msg: unknown): number;
 export declare function resolveModelLimit(event: any, modelLimits?: Map<string, ModelLimitEntry>, options?: any): ResolvedModelLimit;
 /** Bytes are treated conservatively for mostly UTF-8 text, without expensive tokenizer dependencies. */
 export declare function estimateTokens(text: unknown): number;

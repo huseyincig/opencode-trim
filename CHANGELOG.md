@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 — 2026-11-23
+
+- **2-Stage Automatic Compaction Guarantee (`autoCompact`) with Loop Protection (`src/config.ts`, `src/plugin.ts`)**:
+  - Added `autoCompact` option (`DEFAULTS.autoCompact = true`). On every primary `session.hook("context")` turn, `opencode-trim` first prunes eligible historical tool outputs and reasoning blocks; if the **post-prune** context still meets or exceeds `usableTokens` (`maxTokens`, default `350k`) and has history beyond `protectRecentMessages`, `opencode-trim` automatically calls `ctx.session.compact({ sessionID, delivery: "queue" })`.
+  - Added 3-layer `autoCompactState` loop protection per session (`inFlight` lock with 120s timeout cleared on `session.compaction.ended`/`failed`, 3-turn cooldown or message-count drop hysteresis, and auxiliary request exclusion for `compaction`, `title`, and `generate`).
+- **Post-Prune `reportedTokens` Calibration (`src/pressure.ts`, `src/prune.ts`)**:
+  - Recorded per-message pruned character deltas (`recordPrunedMsgChars` / `getPrunedMsgChars` via `WeakMap`) during `pruneContext` (with atomic rollback on error) and subtracted their token equivalent (`Math.floor(prunedCharsSoFar / 3)`) from historical assistant `reportedTokens` in `estimateRequest()`. Prevents stale pre-prune provider token counts from inflating post-prune pressure ratios or triggering unnecessary compaction after pruning has already reduced the context below `maxTokens`.
+- **`ContextCache` Start-Band (`65%`) Admission Unlock (`src/cache.ts`)**:
+  - Tracked `startBandAdmitted` on `CacheSessionEntry` so sessions growing from below `pressureStartRatio` (`< 65%`) into the start band (`>= 65%`) immediately admit a pruning pass once upon crossing the threshold, while keeping the prompt cache stable on subsequent turns within the band.
+- **Cryptographically Signed Reasoning/Thinking Protection & Historical Structured Output Pruning (`src/prune.ts`)**:
+  - Added `hasReasoningSignature()` to protect signed `reasoning` / `thinking` parts (`signature`, `thought_signature`, `thoughtSignature`, `encrypted_content`, `redacted_thinking`, `rs_...` IDs, and `metadata` / `providerMetadata` / `providerOptions` signature fields) from in-place mutation, preventing provider HTTP 400 signature-mismatch errors while continuing to prune unsigned historical reasoning traces.
+  - Scoped `structured(text)` in `src/prune.ts` to PEM blocks (`-----BEGIN `) and binary NUL streams (`\x00`), allowing historical JSON, XML, and HTML tool outputs outside the protected tail to be archived to the recoverable `tool_vault` and pruned (while `src/compress.ts` continues to protect fresh JSON/XML/HTML from line truncation).
+- **Verification**: **`513 / 513`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
+
 ## 0.8.1 — 2026-11-23
 
 - **Plugin-Agnostic Read-Only Tool & CLI Subcommand Matching (`src/prune.ts`, `src/config.ts`)**:
