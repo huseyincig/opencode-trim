@@ -2,9 +2,14 @@
 
 ## 0.9.0 — 2026-11-23
 
-- **2-Stage Automatic Compaction Guarantee (`autoCompact`) with Loop Protection (`src/config.ts`, `src/plugin.ts`)**:
+- **2-Stage Automatic Compaction Guarantee (`autoCompact`) with Loop Protection (`src/config.ts`, `src/plugin.ts`, `src/memory.ts`)**:
   - Added `autoCompact` option (`DEFAULTS.autoCompact = true`). On every primary `session.hook("context")` turn, `opencode-trim` first prunes eligible historical tool outputs and reasoning blocks; if the **post-prune** context still meets or exceeds `usableTokens` (`maxTokens`, default `350k`) and has history beyond `protectRecentMessages`, `opencode-trim` automatically calls `ctx.session.compact({ sessionID, delivery: "queue" })`.
-  - Added 3-layer `autoCompactState` loop protection per session (`inFlight` lock with 120s timeout cleared on `session.compaction.ended`/`failed`, 3-turn cooldown or message-count drop hysteresis, and auxiliary request exclusion for `compaction`, `title`, and `generate`).
+  - Added 3-layer `autoCompactState` loop protection per session (`inFlight` lock with 120s timeout cleared on `session.compaction.ended`/`failed` or when transcript message count / post-prune ratio drops even when `tui.enabled` and `memory.enabled` are both `false`, unconditional 3-turn cooldown `turnsSince >= 3` on subsequent triggers, and auxiliary request exclusion for `compaction`, `title`, and `generate`).
+- **Multi-Location Hook Isolation Across `tool.execute.after`, `session.context` & `session.compaction` (`src/plugin.ts`)**:
+  - Short-circuited `tool.execute.after` and `runPruning` (`session.context` and `session.compaction`) on `foreignEvent(event)` (inspecting `e`, `e.data`, `e.properties`, `e.context`, and `e.session` locations) before any tool compression, context pruning, vault write, cache admission, session pressure tracking, auto-compaction trigger, or stats recording.
+- **Vault Query-Time Retention, Strict `50,000` `maxChars` Cap & Non-Lossless Redaction Contract (`src/memory-store.ts`, `src/memory.ts`, `README.md`, `AUDIT.md`)**:
+  - Enforced `created_at >= now - retentionMs` at query time in `hasVault()`, `getVault()`, and `listVault()` so expired vault rows older than `retentionDays` are never reported as available or returned before a physical prune pass.
+  - Aligned `getVault()` `maxChars` clamping (`200..50,000`, default `12,000`) and `trim_expand` `execute()` input validation (`startLine`, `endLine`, `grep`, `maxChars`) with the declared tool schema, and documented the bounded, secret-redacted (non-lossless) vault recovery semantics.
 - **Post-Prune `reportedTokens` Calibration (`src/pressure.ts`, `src/prune.ts`)**:
   - Recorded per-message pruned character deltas (`recordPrunedMsgChars` / `getPrunedMsgChars` via `WeakMap`) during `pruneContext` (with atomic rollback on error) and subtracted their token equivalent (`Math.floor(prunedCharsSoFar / 3)`) from historical assistant `reportedTokens` in `estimateRequest()`. Prevents stale pre-prune provider token counts from inflating post-prune pressure ratios or triggering unnecessary compaction after pruning has already reduced the context below `maxTokens`.
 - **`ContextCache` Start-Band (`65%`) Admission Unlock (`src/cache.ts`)**:
@@ -12,7 +17,7 @@
 - **Cryptographically Signed Reasoning/Thinking Protection & Historical Structured Output Pruning (`src/prune.ts`)**:
   - Added `hasReasoningSignature()` to protect signed `reasoning` / `thinking` parts (`signature`, `thought_signature`, `thoughtSignature`, `encrypted_content`, `redacted_thinking`, `rs_...` IDs, and `metadata` / `providerMetadata` / `providerOptions` signature fields) from in-place mutation, preventing provider HTTP 400 signature-mismatch errors while continuing to prune unsigned historical reasoning traces.
   - Scoped `structured(text)` in `src/prune.ts` to PEM blocks (`-----BEGIN `) and binary NUL streams (`\x00`), allowing historical JSON, XML, and HTML tool outputs outside the protected tail to be archived to the recoverable `tool_vault` and pruned (while `src/compress.ts` continues to protect fresh JSON/XML/HTML from line truncation).
-- **Verification**: **`513 / 513`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
+- **Verification**: **`516 / 516`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked, and real OpenCode V2 host acceptance verified with `compaction.auto: false` + `autoCompact: true`.
 
 ## 0.8.1 — 2026-11-23
 
@@ -75,7 +80,7 @@
   - Added `scrubBlobs` (data URI/base64/hex elision), `filterDebugLogs`, `collapseStackTraces`, `collapseTablePadding`, and `collapseRepetitionLoops` (single-char & multi-line block loops) to the shell compression pipeline.
   - Added bounded RAM LRU memoization (`128` entries / `512 KB`) to `compressOutput()`, reducing median per-family compression latency to **0.04–0.20 ms**.
   - Added pressure-adaptive `effectiveToolOptions()`, `compactReadEnvelope()` relative path shortening for `read`, `ToolDedupeRing` (`dedupeWindow`, invalidated on edits/compaction), `pruneEditDiagnostics()` (`pruneUnrelatedDiagnostics`) for `edit`/`write`/`apply_patch`, and zero-LLM `SessionWorkingState` tracking (`activeFiles` & `openErrors`).
-- **Advanced Context Pruning & Lossless Retrievable Vault (`src/prune.ts`, `src/memory-store.ts`, `src/memory.ts`)**:
+- **Advanced Context Pruning & Bounded Secret-Redacted Vault (`src/prune.ts`, `src/memory-store.ts`, `src/memory.ts`)**:
   - Added `purgeErrorInputs` (blanks oversized inputs on old failed discrete and combined V2 `type: "tool"` calls while keeping error outputs intact), `pruneHistoricalReasoning` (omits old `reasoning`/`thinking` traces outside the protected tail), `prunePreviewLines` (`buildPreviewNotice` idempotent head/tail previews), and `scorePruningCandidate`.
   - Added secret-redacted `vault` table (`maxVaultRows: 500`, multilingual & nested `pwd`/`PIN` redaction) to `memory.db`, `recoverableNotice`/`expiredNotice` markers with prompt-injection boundary text, and `trim_expand` tool + structured Code Mode `output` JSON schemas on both `trim_expand` and `trim_history_search`.
 - **Verification**: **`500 / 500`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked, `npm run bench` and `npm run pack:dry` (`147` files) passing.

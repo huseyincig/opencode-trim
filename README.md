@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/opencode-trim?color=blue&logo=npm&logoColor=white)](https://www.npmjs.com/package/opencode-trim)
 [![OpenCode: V2 (>=2.3.0)](https://img.shields.io/badge/OpenCode-V2%20(%3E%3D2.3.0)-10b981?logo=terminal&logoColor=white)](https://opencode.ai)
 [![V2 host baseline](https://img.shields.io/badge/Host%20baseline-v2.3.2%20verified-10b981?logo=checkmarx&logoColor=white)](AUDIT.md)
-[![Tests: 513/513 Passing](https://img.shields.io/badge/Tests-513%2F513%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
+[![Tests: 516/516 Passing](https://img.shields.io/badge/Tests-516%2F516%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
 [![Node.js](https://img.shields.io/badge/node-%5E26.0.0-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -20,7 +20,7 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 
 > OpenCode Trim **v0.9.0** was verified on **23 November 2026** against **OpenCode V2 (`>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
 
-- **Current Automated Verification:** **513 / 513** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, recoverable vault, 2-stage auto-compaction fallback, and TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
+- **Current Automated Verification:** **516 / 516** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, bounded secret-redacted recoverable vault, 2-stage auto-compaction fallback, and TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
 - **Deterministic Compression & Pruning Benchmark (`npm run bench`):**
   - **24 Command Families:** `1,801,616 B` input → `2,483 B` output (`≈99.86%` reduction on the adversarial progress/noise corpus, `allChanged: true`, per-family median **0.04–0.20 ms** with RAM LRU memoization).
   - **Context Pruning:** `388 / 400` eligible historical tool results pruned (`757,266` characters / `≈252,422` estimated tokens reclaimed, median `≈7 ms`).
@@ -42,7 +42,7 @@ Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for repr
 - **Compact Guardian-Grade TUI Sidebar (`./tui`):** Opt-in (`tui.enabled: true`), borderless `sidebar.content` widget featuring `▶` / `▼` disclosure, two-column `StatRow` metrics, host-native context usage (`input + cache.read` over catalog limit), persisted compaction-history fallback after server restarts, and RPC-first probing with bounded hidden retries.
 - **Optional SQLite FTS5 Compaction Memory (`memory.enabled: true`):** Default-off Phase 1 & 1.1 archive using Node 26 built-in `node:sqlite` + FTS5. Observes native compaction summaries, scrubs secrets fail-closed (`[REDACTED]`), enforces composite `UNIQUE(project, event_id)` isolation, and exposes section-aware `trim_history_search` (`codemode: false`).
 - **Universal V2 Plugin Mesh Bridge (`src/bridge.ts`):** Zero-dependency N-way interoperability (`BRIDGE_REVISION: 2.3.1`) with sibling OpenCode V2 plugins: honors `isTrimMeshProtected` and cryptographic provenance tokens (`verifyMeshMetadata`), skips already-bounded outputs (`wasMeshBounded`), stamps `boundedBy: "opencode-trim"`, and cleans up session state on `session.deleted`.
-- **Smart Context Cap, 2-Stage Auto-Compact Fallback, Token Calibration & Lossless Vault (`trim_expand`):** Supports `contextWindowCap` (`"350k"` out-of-the-box default) for 1M+ models, 2-stage automatic compaction fallback (`autoCompact: true` — prunes first, then triggers `ctx.session.compact({ sessionID, delivery: "queue" })` with in-flight/cooldown loop protection if post-prune context still reaches `maxTokens`), post-prune provider-reported token calibration, start-band (`65%`) prompt-cache admission unlocking, signed reasoning/thinking block protection (`signature`, `thought_signature`, `encrypted_content`), historical JSON/XML/HTML pruning, compaction-boundary cache reset, structural cleaners (`scrubBlobs`, `filterDebugLogs`, `collapseStackTraces`, `collapseTablePadding`, `collapseRepetitionLoops`) with bounded RAM LRU memoization, `pruneHistoricalReasoning`, `pruneUnrelatedDiagnostics`, `purgeErrorInputs`, `ToolDedupeRing`, and a secret-redacted SQLite `vault` (`trim_expand` with ref discovery, line-range & bounded regex `grep` slicing).
+- **Smart Context Cap, 2-Stage Auto-Compact Fallback, Token Calibration & Bounded Secret-Redacted Vault (`trim_expand`):** Supports `contextWindowCap` (`"350k"` out-of-the-box default) for 1M+ models, 2-stage automatic compaction fallback (`autoCompact: true` — prunes first, then triggers `ctx.session.compact({ sessionID, delivery: "queue" })` with in-flight/cooldown loop protection if post-prune context still reaches `maxTokens`), post-prune provider-reported token calibration, start-band (`65%`) prompt-cache admission unlocking, signed reasoning/thinking block protection (`signature`, `thought_signature`, `encrypted_content`), historical JSON/XML/HTML pruning, compaction-boundary cache reset, structural cleaners (`scrubBlobs`, `filterDebugLogs`, `collapseStackTraces`, `collapseTablePadding`, `collapseRepetitionLoops`) with bounded RAM LRU memoization, `pruneHistoricalReasoning`, `pruneUnrelatedDiagnostics`, `purgeErrorInputs`, `ToolDedupeRing`, and a bounded, secret-redacted SQLite `vault` (`trim_expand` with ref discovery, line-range & bounded regex `grep` slicing).
 - **Strict TypeScript & Zero Runtime Dependencies:** Pure strict TypeScript (`src/*.ts`, `src/tui.tsx`) compiled to `dist/*.js` + `.d.ts` targeting Node.js 26 Active LTS (`^26.0.0`) with zero external runtime dependencies.
 
 ---
@@ -117,7 +117,7 @@ Or install it into your project's `node_modules` via npm:
 npm install -D opencode-trim
 ```
 
-- **Strict Multi-Location Isolation:** When running on a shared multi-location OpenCode server, Trim canonicalizes workspace directories via `realpathSync` / `path.resolve` and filters events fail-closed so compaction archives, context after-fills, and TUI stats never leak across projects.
+- **Strict Multi-Location Isolation:** When running on a shared multi-location OpenCode server, Trim canonicalizes workspace directories via `realpathSync` / `path.resolve` and short-circuits foreign or conflicting events (`foreignEvent`) across `tool.execute.after`, `session.context`, `session.compaction`, compaction event subscriptions, and stats so tool compression, context pruning, vault writes, cache/session state, auto-compaction triggers, and TUI stats never cross project boundaries.
 
 ### 3. 🔗 `.opencode/plugins/` Directory or Symlink Installation (Monorepo & Air-Gapped)
 
@@ -345,10 +345,14 @@ When `memory.enabled: true` is configured, OpenCode Trim archives native compact
   - Supports optional `section`, `sessionID`, `days` (recency window), `limit` (`1..20`), and `fullSection` (`2,400`-char expanded excerpt vs `400`-char snippet) filters.
   - Ranks matches by distinct query-term hits first, then newest within the same session, then BM25 rank and recency (scanning up to `1,000` rows / `8,000,000` chars inside a read transaction).
   - Enforces `agentAllowlist` and `agentDenylist` in `ctx.tool.hook("execute.before")`.
-- **Recoverable Pruning Vault & Ref Discovery (`trim_expand`):**
-  - Stores pruned tool outputs in a secret-redacted SQLite `vault` table (`maxVaultRows: 500` per project).
-  - **Ref Discovery Mode:** Calling `trim_expand` without `id` lists recent cached refs (`id`, `tool`, `target`, `totalLines`, `date`, and `totalVaultRows` capacity) with optional `tool`, `target`, and `limit` filters so pruned outputs remain discoverable even after pruning notices leave active context.
-  - **Slicing & Bounded Regex Grep:** Passing `id` (`"trm_..."`) restores the output with optional `startLine`, `endLine`, `grep`, `regex` (ReDoS-guarded), `caseSensitive`, and `maxChars` (default `12,000` chars) bounds.
+- **Bounded, Secret-Redacted Recoverable Pruning Vault & Ref Discovery (`trim_expand`):**
+  - Stores pruned tool outputs in a project-scoped SQLite `vault` table (`maxVaultRows: 500` per project, `retentionDays: 90` default).
+  - **Not Byte-For-Byte Lossless (Redaction, Truncation & Retention Boundaries):**
+    1. **Secret Redaction:** Every stored output is scrubbed via `redactSecrets` (`[REDACTED]`) before insertion; unclosed or over-depth (`>32` nesting or `>200,000`-char scan window) structured secret values fail closed and redact through the end of the text. Redacted secrets cannot be recovered verbatim.
+    2. **Storage & Retrieval Truncation:** Inputs over `MAX_TEXT_CHARS` (`1,000,000` chars) are sliced before storage. On retrieval, `trim_expand` prepends 1-based line numbers (`1: ...`), caps per-line regex testing at `4,096` chars, and truncates the returned text at `maxChars` (default `12,000`, configurable `200..50,000` chars).
+    3. **Capacity & Time Retention:** Oldest entries are evicted past `500` rows per project (`maxVaultRows`), and entries older than `retentionDays` (`1..3650` days) are excluded at query time (`hasVault`, `getVault`, `listVault`) and physically pruned on store open/prune. Evicted or expired refs fail closed to `expiredNotice`.
+  - **Ref Discovery Mode:** Calling `trim_expand` without `id` lists active non-expired cached refs (`id`, `tool`, `target`, `totalLines`, `date`, and `totalVaultRows` capacity) with optional `tool`, `target`, and `limit` (`1..50`) filters.
+  - **Slicing & Bounded Regex Grep:** Passing `id` (`"trm_..."`) restores the redacted excerpt with optional `startLine`, `endLine`, `grep` (`<=200` chars), `regex` (ReDoS-guarded), `caseSensitive`, and `maxChars` (`200..50,000`) bounds.
 
 ---
 
@@ -474,8 +478,8 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 Run the full verification suite locally:
 
 ```bash
-npm run check     # Strict tsc --noEmit, dist/ build, 94-file syntax check + 513 tests
-npm test          # Node.js test runner (513 tests across 28 suites)
+npm run check     # Strict tsc --noEmit, dist/ build, 94-file syntax check + 516 tests
+npm test          # Node.js test runner (516 tests across 28 suites)
 npm run bench     # Deterministic 24-family compression & 800-message pruning benchmark
 npm run pack:dry  # Verify packed npm tarball contents (147 files)
 ```

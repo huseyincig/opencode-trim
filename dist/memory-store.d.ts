@@ -71,14 +71,15 @@ export declare function openMemoryStore({ dbPath, retentionDays, maxResults, max
         ref_id: any;
         line_count: number;
     };
-    hasVault(vaultProject: unknown, refId: unknown): boolean;
-    listVault({ project: vaultProject, tool, target, limit }?: {
+    hasVault(vaultProject: unknown, refId: unknown, now?: number): boolean;
+    listVault({ project: vaultProject, tool, target, limit, now }?: {
         project?: string;
         tool?: string | null;
         target?: string | null;
         limit?: number;
+        now?: number;
     }): VaultListResult;
-    getVault({ project: vaultProject, ref_id: refId, startLine, endLine, grep, regex, caseSensitive, maxChars }?: {
+    getVault({ project: vaultProject, ref_id: refId, startLine, endLine, grep, regex, caseSensitive, maxChars, now }?: {
         project?: string;
         ref_id?: string;
         startLine?: number;
@@ -87,6 +88,7 @@ export declare function openMemoryStore({ dbPath, retentionDays, maxResults, max
         regex?: boolean;
         caseSensitive?: boolean;
         maxChars?: number;
+        now?: number;
     }): VaultLookupResult;
     close(): void;
 };

@@ -963,10 +963,11 @@ test('Step 12a: listVault discovers cached refs with tool/target/limit filters a
   assert.deepEqual(empty.refs, []);
   assert.match(empty.text, /No cached pruned tool outputs found/);
 
-  store.saveVault({ project: '/proj/disc', session_id: 's1', ref_id: 'trm_a1', tool: 'read', target: 'src/models.config.json', text: 'line1\nline2', created_at: 1000 });
-  store.saveVault({ project: '/proj/disc', session_id: 's1', ref_id: 'trm_a2', tool: 'shell', target: 'npm test', text: 'pass1\npass2\npass3', created_at: 2000 });
-  store.saveVault({ project: '/proj/disc', session_id: 's2', ref_id: 'trm_a3', tool: 'read', target: 'src/plugin.ts', text: 'code', created_at: 3000 });
-  store.saveVault({ project: '/proj/other', session_id: 's9', ref_id: 'trm_other', tool: 'read', target: 'secret.ts', text: 'other', created_at: 4000 });
+  const base = Date.now() - 10_000;
+  store.saveVault({ project: '/proj/disc', session_id: 's1', ref_id: 'trm_a1', tool: 'read', target: 'src/models.config.json', text: 'line1\nline2', created_at: base + 1000 });
+  store.saveVault({ project: '/proj/disc', session_id: 's1', ref_id: 'trm_a2', tool: 'shell', target: 'npm test', text: 'pass1\npass2\npass3', created_at: base + 2000 });
+  store.saveVault({ project: '/proj/disc', session_id: 's2', ref_id: 'trm_a3', tool: 'read', target: 'src/plugin.ts', text: 'code', created_at: base + 3000 });
+  store.saveVault({ project: '/proj/other', session_id: 's9', ref_id: 'trm_other', tool: 'read', target: 'secret.ts', text: 'other', created_at: base + 4000 });
 
   const all = store.listVault({ project: '/proj/disc' });
   assert.equal(all.found, true);
@@ -1569,5 +1570,226 @@ test('Step 15e: setupTrim 2-stage autoCompact skips compaction when pruning brin
   assert.equal(compactCalls.length, 1, 'in-flight/cooldown guard must prevent repeated compact triggers');
 
   await stop();
+});
+
+test('Step 16a: foreign-location events in tool.execute.after, session.context, and session.compaction never mutate foreign data or leak into local vault/cache/state', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'trim-foreign-iso-'));
+  const dbPath = join(tmpDir, 'memory.db');
+  let toolCb: any;
+  let contextCb: any;
+  let compactionCb: any;
+  const compactCalls: any[] = [];
+
+  const ctx = {
+    location: { directory: '/proj/local' },
+    options: {
+      maxTokens: '350k',
+      compactionInputPruning: true,
+      autoCompact: true,
+      dedupeWindow: 4,
+      minOutputChars: 200,
+      maxOutputLines: 25,
+      maxOutputChars: 2500,
+      minSavingsRatio: 0.05,
+      protectRecentMessages: 4,
+      protectRecentTokens: 1024,
+      keepRecentToolResults: 1,
+      pruneAfterToolChars: 10000,
+      pruneMinResultChars: 200,
+      memory: { enabled: true, dbPath, retentionDays: 90 },
+      tui: { enabled: false },
+    },
+    model: {
+      list: async () => ({
+        data: [{ providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 384_000 } }],
+      }),
+    },
+    tool: {
+      hook: async (name: string, fn: any) => {
+        if (name === 'execute.after') toolCb = fn;
+        return { dispose: async () => {} };
+      },
+      transform: async () => ({ dispose: async () => {} }),
+    },
+    session: {
+      hook: async (name: string, fn: any) => {
+        if (name === 'context') contextCb = fn;
+        if (name === 'compaction') compactionCb = fn;
+        return { dispose: async () => {} };
+      },
+      compact: async (input: any) => {
+        compactCalls.push(input);
+        return { id: 'cmp-foreign' };
+      },
+    },
+    event: {
+      subscribe: async () => (async function* () {})(),
+    },
+  };
+
+  const stop = await setupTrim(ctx);
+
+  // 1. Foreign tool.execute.after must NOT compress or touch foreign shell output
+  const foreignShellText = [...Array.from({ length: 180 }, (_, i) => `status ${i}`), 'Tests: 180 passed'].join('\n');
+  const foreignToolEvent = {
+    status: 'completed',
+    sessionID: 'ses-foreign',
+    location: { directory: '/proj/foreign' },
+    tool: 'shell',
+    input: { command: 'npm test' },
+    result: { content: foreignShellText, metadata: { exitCode: 0 } },
+  };
+  await toolCb(foreignToolEvent);
+  assert.equal(foreignToolEvent.result.content, foreignShellText, 'foreign tool.execute.after must not mutate foreign tool output');
+
+  // 2. Foreign session.context and session.compaction must NOT prune foreign messages or store into local vault
+  const makeForeignMsgs = () => {
+    const msgs: any[] = [];
+    for (let i = 0; i < 12; i++) {
+      msgs.push({ id: `fa-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `fc-${i}`, name: 'shell', input: { command: 'echo hi' } }] });
+      msgs.push({ id: `fr-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `fc-${i}`, name: 'shell', result: { type: 'text', value: `foreign row ${i}\n` + 'x'.repeat(2000) } }] });
+    }
+    return msgs;
+  };
+  const foreignCtxMsgs = makeForeignMsgs();
+  const foreignCtxBefore = structuredClone(foreignCtxMsgs);
+  await contextCb({
+    sessionID: 'ses-foreign',
+    location: { directory: '/proj/foreign' },
+    model: { providerID: 'p', id: 'm' },
+    tools: {},
+    system: [],
+    messages: foreignCtxMsgs,
+  });
+  assert.deepEqual(foreignCtxMsgs, foreignCtxBefore, 'foreign session.context must not prune foreign messages');
+
+  const foreignCompMsgs = makeForeignMsgs();
+  const foreignCompBefore = structuredClone(foreignCompMsgs);
+  await compactionCb({
+    sessionID: 'ses-foreign',
+     properties: { location: { directory: '/proj/foreign' } },
+    model: { providerID: 'p', id: 'm' },
+    tools: {},
+    system: [],
+    messages: foreignCompMsgs,
+  });
+  assert.deepEqual(foreignCompMsgs, foreignCompBefore, 'foreign session.compaction must not prune foreign messages');
+
+  await stop();
+
+  // Verify local vault has 0 rows from foreign events
+  const checkStore = openMemoryStore({ dbPath, project: '/proj/local' });
+  const vaultList = checkStore.listVault({ project: '/proj/local' });
+  assert.equal(vaultList.totalVaultRows, 0, 'foreign pruning must never write into local project vault');
+  checkStore.close();
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('Step 16b: autoCompact clears inFlight when compaction shrinks transcript or pressure even with tui/memory disabled, and enforces 3-turn cooldown after partial compaction', async () => {
+  const compactCalls: any[] = [];
+  let contextCb: any;
+  const ctx = {
+    options: {
+      maxTokens: '350k',
+      autoCompact: true,
+      protectRecentMessages: 4,
+      protectRecentTokens: 1024,
+      keepRecentToolResults: 1,
+      pruneAfterToolChars: 20000,
+      tui: { enabled: false },
+      memory: { enabled: false },
+    },
+    model: {
+      list: async () => ({
+        data: [{ providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 384_000 } }],
+      }),
+    },
+    tool: { hook: async () => ({ dispose: async () => {} }) },
+    session: {
+      hook: async (name: string, fn: any) => {
+        if (name === 'context') contextCb = fn;
+        return { dispose: async () => {} };
+      },
+      compact: async (input: any) => {
+        compactCalls.push(input);
+        return { id: `cmp-${compactCalls.length}` };
+      },
+    },
+  };
+
+  const stop = await setupTrim(ctx);
+  const makeUnprunable = (count: number, tokens: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `m-${i}`,
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: [{ type: 'text', text: `turn ${i}` }],
+      ...(i === count - 1 ? { info: { role: 'assistant', tokens: { input: tokens, output: 1000 } } } : {}),
+    }));
+
+  // Turn 1: 16 messages, 400k tokens -> triggers compact #1 (lastMsgCount = 16, inFlight = true, turnsSince = 0)
+  await contextCb({ sessionID: 's-loop', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages: makeUnprunable(16, 400_000) });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(compactCalls.length, 1);
+
+  // Turn 2 (turnsSince = 1): Suppose compaction ran and shrank message count from 16 -> 10,
+  // BUT those 10 messages still have 370k tokens (>= 350k)!
+  // Must clear inFlight (since msgCount < 16), but MUST NOT re-trigger compact yet because turnsSince (1) < 3!
+  await contextCb({ sessionID: 's-loop', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages: makeUnprunable(10, 370_000) });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(compactCalls.length, 1, 'must not immediately re-trigger on turn 1 after partial compaction');
+
+  // Turn 3 (turnsSince = 2): 11 messages, 375k tokens -> still within 3-turn cooldown
+  await contextCb({ sessionID: 's-loop', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages: makeUnprunable(11, 375_000) });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(compactCalls.length, 1, 'must not re-trigger on turn 2');
+
+  // Turn 4 (turnsSince = 3): 12 messages, 380k tokens -> cooldown elapsed and inFlight was cleared by the turn-2 shrinkage -> triggers compact #2!
+  await contextCb({ sessionID: 's-loop', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages: makeUnprunable(12, 380_000) });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(compactCalls.length, 2, 'must allow re-trigger on turn 3 after compaction shrinkage cleared inFlight');
+
+  await stop();
+});
+
+test('Step 16c: trim_expand / vault enforces query-time retentionDays on hasVault/getVault/listVault, strict 50000 maxChars cap, and redaction boundaries', async () => {
+  const DAY = 86_400_000;
+  const now = Date.now();
+  const store = openMemoryStore({ dbPath: ':memory:', retentionDays: 7, maxVaultRows: 500 });
+
+  // Save an expired vault entry (10 days old, retentionDays = 7) and a fresh entry
+  store.saveVault({
+    project: '/proj/v',
+    ref_id: 'trm_expired',
+    tool: 'read',
+    target: 'old.ts',
+    text: 'old content line 1\nold content line 2',
+    created_at: now - 10 * DAY,
+  });
+  store.saveVault({
+    project: '/proj/v',
+    ref_id: 'trm_fresh',
+    tool: 'read',
+    target: 'fresh.ts',
+    text: 'API_KEY=sk-1234567890abcdefghijklmnop\n' + 'fresh line\n'.repeat(6000),
+    created_at: now - 1 * DAY,
+  });
+
+  // 1. Expired vault entry must NOT be visible via hasVault, getVault, or listVault
+  assert.equal(store.hasVault('/proj/v', 'trm_expired', now), false, 'hasVault must return false for rows older than retentionDays');
+  const expiredGet = store.getVault({ project: '/proj/v', ref_id: 'trm_expired', now });
+  assert.equal(expiredGet.found, false, 'getVault must not return rows older than retentionDays');
+  const list = store.listVault({ project: '/proj/v', now });
+  assert.equal(list.totalVaultRows, 1, 'listVault must exclude expired rows');
+  assert.equal(list.refs[0].id, 'trm_fresh');
+
+  // 2. Redaction is applied before storage (not lossless for secrets) and maxChars is strictly capped at 50000
+  const freshGet = store.getVault({ project: '/proj/v', ref_id: 'trm_fresh', maxChars: 90000, now });
+  assert.equal(freshGet.found, true);
+  assert.equal(freshGet.truncated, true);
+  assert.doesNotMatch(freshGet.text, /sk-1234567890/);
+  assert.match(freshGet.text, /API_KEY=\[REDACTED\]/);
+  assert.match(freshGet.text, /TRUNCATED at 50000 of/);
+
+  store.close();
 });
 

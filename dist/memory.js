@@ -326,6 +326,18 @@ export async function setupMemory(ctx, opts, hooks) {
                     }
                     if (typeof id !== 'string' || !id.trim() || id.length > 128)
                         throw new Error('id must be a non-empty string');
+                    if (input?.startLine !== undefined && input?.startLine !== null && (typeof input.startLine !== 'number' || !Number.isInteger(input.startLine) || input.startLine < 1)) {
+                        throw new Error('startLine must be a positive integer');
+                    }
+                    if (input?.endLine !== undefined && input?.endLine !== null && (typeof input.endLine !== 'number' || !Number.isInteger(input.endLine) || input.endLine < 1)) {
+                        throw new Error('endLine must be a positive integer');
+                    }
+                    if (input?.grep !== undefined && input?.grep !== null && (typeof input.grep !== 'string' || input.grep.length > 200)) {
+                        throw new Error('grep must be a string up to 200 chars');
+                    }
+                    if (input?.maxChars !== undefined && input?.maxChars !== null && (typeof input.maxChars !== 'number' || !Number.isInteger(input.maxChars) || input.maxChars < 200 || input.maxChars > 50000)) {
+                        throw new Error('maxChars must be an integer between 200 and 50000');
+                    }
                     const out = store.getVault({
                         project,
                         ref_id: id.trim(),
@@ -457,6 +469,7 @@ export async function setupMemory(ctx, opts, hooks) {
             }
             else if (type === 'session.compaction.failed') {
                 pending.delete(sid);
+                callHook(hooks?.onCompactionFailed, sid);
             }
             else {
                 const before = pending.get(sid);

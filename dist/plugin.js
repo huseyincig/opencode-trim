@@ -550,13 +550,53 @@ export async function setupTrim(ctx) {
         fn(stats);
     }
     catch { /* never affect the engine */ } };
+    const canonDir = (v) => {
+        try {
+            if (typeof v !== 'string' || !v || !isAbsolute(v) || v.includes('\0'))
+                return undefined;
+            try {
+                return realpathSync(v);
+            }
+            catch {
+                return resolvePath(v);
+            }
+        }
+        catch {
+            return undefined;
+        }
+    };
+    const localDir = canonDir(ctx?.location?.directory);
+    // Events from another or conflicting location must not touch this location's context, tools, vault, cache, or stats.
+    const foreignEvent = (e) => {
+        if (!localDir)
+            return false;
+        try {
+            for (const holder of [e, e?.data, e?.properties, e?.context, e?.session]) {
+                const loc = holder?.location;
+                if (loc === undefined || loc === null)
+                    continue;
+                if (!obj(loc))
+                    return true;
+                const raw = loc.directory;
+                if (raw === undefined || raw === null)
+                    continue;
+                const dir = canonDir(raw);
+                if (dir === undefined || dir !== localDir)
+                    return true;
+            }
+            return false;
+        }
+        catch {
+            return true;
+        }
+    };
     const contextStats = (event, pressure) => observe((s) => s.recordContext({
         sessionID: sessionOf(event), estimatedTokens: pressure.reportedTokens !== undefined ? Math.max(pressure.estimatedTokens, pressure.reportedTokens) : pressure.estimatedTokens, estimatedChars: pressure.estimatedChars,
         usableTokens: pressure.usableTokens, limitTokens: pressure.modelContext, ratio: pressure.ratio,
         source: pressure.modelSource, media: pressure.mediaPresent
     }));
     const runPruning = async (event, kind) => {
-        if (!opts.pruning)
+        if (!opts.pruning || foreignEvent(event))
             return;
         try {
             await ensureModelLimit(ctx, modelLimits, event?.model, modelLookups);
@@ -584,19 +624,23 @@ export async function setupTrim(ctx) {
                 event?.kind !== 'title' &&
                 event?.kind !== 'generate' &&
                 sid &&
-                typeof ctx?.session?.compact === 'function' &&
-                !foreignEvent(event)) {
+                typeof ctx?.session?.compact === 'function') {
                 const msgCount = Array.isArray(event?.messages) ? event.messages.length : 0;
                 const prev = autoCompactState.get(sid);
-                if (prev)
+                if (prev) {
                     prev.turnsSince += 1;
+                    if (msgCount < prev.lastMsgCount || (typeof postPressure.ratio === 'number' && Number.isFinite(postPressure.ratio) && postPressure.ratio < 1.0)) {
+                        prev.inFlight = false;
+                        prev.lastMsgCount = msgCount;
+                    }
+                }
                 if (typeof postPressure.ratio === 'number' &&
                     Number.isFinite(postPressure.ratio) &&
                     postPressure.ratio >= 1.0 &&
                     msgCount > opts.protectRecentMessages) {
                     const now = Date.now();
                     const canTrigger = !prev || ((!prev.inFlight || now - prev.triggeredAt > 120_000) &&
-                        (prev.turnsSince >= 3 || msgCount < prev.lastMsgCount));
+                        prev.turnsSince >= 3);
                     if (canTrigger) {
                         autoCompactState.delete(sid);
                         if (autoCompactState.size >= 128)
@@ -611,8 +655,6 @@ export async function setupTrim(ctx) {
                 }
             }
             observe((s) => {
-                if (foreignEvent(event))
-                    return;
                 // A native compaction request is not the live model context; only its prune counters apply.
                 if (kind === 'context')
                     contextStats(event, postPressure);
@@ -631,22 +673,6 @@ export async function setupTrim(ctx) {
         }
         catch { /* stats are best effort */ }
     };
-    const canonDir = (v) => {
-        try {
-            if (typeof v !== 'string' || !v || !isAbsolute(v) || v.includes('\0'))
-                return undefined;
-            try {
-                return realpathSync(v);
-            }
-            catch {
-                return resolvePath(v);
-            }
-        }
-        catch {
-            return undefined;
-        }
-    };
-    const localDir = canonDir(ctx?.location?.directory);
     const resetSessionState = (sid) => {
         if (typeof sid !== 'string' || !sid)
             return;
@@ -664,30 +690,6 @@ export async function setupTrim(ctx) {
             onSessionForget: resetSessionState,
         }),
     });
-    // Events from another or conflicting location must not touch this location's stats.
-    const foreignEvent = (e) => {
-        if (!localDir)
-            return false;
-        try {
-            for (const holder of [e, e?.data, e?.properties]) {
-                const loc = holder?.location;
-                if (loc === undefined || loc === null)
-                    continue;
-                if (!obj(loc))
-                    return true;
-                const raw = loc.directory;
-                if (raw === undefined || raw === null)
-                    continue;
-                const dir = canonDir(raw);
-                if (dir === undefined || dir !== localDir)
-                    return true;
-            }
-            return false;
-        }
-        catch {
-            return true;
-        }
-    };
     let subscriptionAbort = null;
     const dispose = async () => {
         try {
@@ -708,10 +710,12 @@ export async function setupTrim(ctx) {
         if (opts.shell || opts.toolFiltering) {
             registrations.push(valid(await ctx.tool.hook('execute.after', (event) => {
                 try {
+                    if (foreignEvent(event))
+                        return;
                     const sessionID = toolSessionOf(event);
                     const effOpts = sessionID ? effectiveToolOptions(opts, sessionPressure.get(sessionID)) : opts;
                     const rt = { directory: localDir, dedupeRing, workingState, sessionID };
-                    if (!stats || foreignEvent(event))
+                    if (!stats)
                         processToolEvent(event, effOpts, undefined, rt);
                     else {
                         processToolEvent(event, effOpts, (info) => stats.recordTool({ sessionID, ...info }), rt);
@@ -829,6 +833,11 @@ export async function setupTrim(ctx) {
                     dedupeRing.reset(sid);
                     workingState.reset(sid);
                     sessionPressure.delete(sid);
+                    const cur = autoCompactState.get(sid);
+                    if (cur)
+                        cur.inFlight = false;
+                },
+                onCompactionFailed: (sid) => {
                     const cur = autoCompactState.get(sid);
                     if (cur)
                         cur.inFlight = false;
