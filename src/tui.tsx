@@ -18,14 +18,13 @@ import {
   STORAGE_KEY,
   TRIM_VERSION,
   type BarSegments,
-  type HealthState,
 } from "./tui-model.ts"
 
 const DEBOUNCE_MS = 150
 const POLL_MS = 2000
 const MAX_HIDDEN_RETRIES = 3
-const COLLAPSED_BAR_WIDTH = 12
-const EXPANDED_BAR_WIDTH = 24
+const COLLAPSED_BAR_WIDTH = 18
+const EXPANDED_BAR_WIDTH = 32
 const REFRESH_EVENTS = ["session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.step.ended"]
 const RELOAD_EVENTS = ["plugin.updated", "model.updated", "provider.updated"]
 
@@ -40,31 +39,11 @@ function isRpcUnavailable(err: unknown): boolean {
   return msg.includes("rpc.unavailable") || msg.includes("unavailable") || msg.includes("404") || msg.includes("not found")
 }
 
-function StatRow(props: {
-  label: string
-  value: string | number
-  labelColor: any
-  valueColor: any
-}) {
-  return (
-    <box width="100%" flexDirection="row" justifyContent="space-between">
-      <text fg={props.labelColor} flexShrink={0} wrapMode="none">
-        {props.label}
-      </text>
-      <text fg={props.valueColor} flexShrink={1} marginLeft={1} wrapMode="none">
-        {props.value}
-      </text>
-    </box>
-  )
-}
-
 function SegmentedBar(props: {
   segments: BarSegments
-  health: HealthState
   sysColor: any
   chatColor: any
   toolsColor: any
-  warnColor: any
   emptyColor: any
 }) {
   const s = () => props.segments
@@ -78,9 +57,6 @@ function SegmentedBar(props: {
       </Show>
       <Show when={s().tools > 0}>
         <text fg={props.toolsColor} wrapMode="none">{"█".repeat(s().tools)}</text>
-      </Show>
-      <Show when={s().toolsWarn > 0}>
-        <text fg={props.warnColor} wrapMode="none">{"█".repeat(s().toolsWarn)}</text>
       </Show>
       <Show when={s().empty > 0}>
         <text fg={props.emptyColor} wrapMode="none">{"█".repeat(s().empty)}</text>
@@ -366,7 +342,6 @@ export default Plugin.define({
           messageBreakdown: msgBreakdown(),
         }),
       )
-      const toolsBarColor = () => (model().health.state === "critical" ? errColor() : okColor())
       const collapsedSegments = createMemo(() => model().segments(COLLAPSED_BAR_WIDTH))
       const expandedSegments = createMemo(() => model().segments(EXPANDED_BAR_WIDTH))
 
@@ -391,19 +366,14 @@ export default Plugin.define({
                   <box flexDirection="row" alignItems="center" flexShrink={1} marginLeft={1}>
                     <SegmentedBar
                       segments={collapsedSegments()}
-                      health={model().health.state}
                       sysColor={sysColor()}
                       chatColor={chatColor()}
-                      toolsColor={toolsBarColor()}
-                      warnColor={warnColor()}
+                      toolsColor={okColor()}
                       emptyColor={faint()}
                     />
                   </box>
                   <box flexDirection="row" alignItems="center" flexShrink={0} marginLeft={1}>
                     <text fg={tone(model().health.tone)} wrapMode="none"><b>{model().context.percentText}</b></text>
-                    <Show when={model().sessionAge}>
-                      <text fg={muted()} wrapMode="none">{" " + model().sessionAge}</text>
-                    </Show>
                     <Show when={header().marker}>
                       <text fg={tone("warning")} wrapMode="none">{" " + header().marker}</text>
                     </Show>
@@ -430,49 +400,63 @@ export default Plugin.define({
                   </Show>
                 </box>
               </box>
-              <box width="100%" flexDirection="row" justifyContent="space-between" alignItems="center" flexShrink={0}>
+              <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
                 <SegmentedBar
                   segments={expandedSegments()}
-                  health={model().health.state}
                   sysColor={sysColor()}
                   chatColor={chatColor()}
-                  toolsColor={toolsBarColor()}
-                  warnColor={warnColor()}
+                  toolsColor={okColor()}
                   emptyColor={faint()}
                 />
-                <text fg={tone(model().health.tone)} flexShrink={0} marginLeft={1} wrapMode="none">
-                  <b>{model().context.percentText}</b>
-                </text>
               </box>
               <box width="100%" flexDirection="row" justifyContent="space-between" alignItems="center" flexShrink={0}>
                 <box flexDirection="row" alignItems="center" flexShrink={0}>
-                  <text fg={sysColor()} wrapMode="none">sys</text>
-                  <text fg={chatColor()} wrapMode="none">{"  chat"}</text>
-                  <text fg={okColor()} wrapMode="none">{"  tools"}</text>
+                  <text fg={sysColor()} wrapMode="none">sys </text>
+                  <text fg={base()} wrapMode="none">{model().composition.sysText}</text>
                 </box>
-                <text fg={base()} flexShrink={1} marginLeft={1} wrapMode="none">
-                  {model().context.pairText}
-                </text>
+                <box flexDirection="row" alignItems="center" flexShrink={0}>
+                  <text fg={chatColor()} wrapMode="none">chat </text>
+                  <text fg={base()} wrapMode="none">{model().composition.chatText}</text>
+                </box>
+                <box flexDirection="row" alignItems="center" flexShrink={0}>
+                  <text fg={okColor()} wrapMode="none">tools </text>
+                  <text fg={base()} wrapMode="none">{model().composition.toolsText}</text>
+                </box>
               </box>
               <Show when={viewMode() === "default"}>
-                <box width="100%" flexDirection="row" justifyContent="space-between" alignItems="center" flexShrink={0}>
-                  <box flexDirection="row" alignItems="center" flexShrink={0}>
-                    <text fg={tone(model().health.tone)} wrapMode="none">{"● " + model().health.label}</text>
-                  </box>
-                  <text fg={tone(model().statusRight.tone)} flexShrink={1} marginLeft={1} wrapMode="none">
-                    {model().statusRight.parts.join(" · ")}
+                <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
+                  <text fg={muted()} flexShrink={1} wrapMode="none">
+                    {model().context.parts.join(" · ")}
+                  </text>
+                  <text fg={tone(model().health.tone)} flexShrink={0} marginLeft={2} wrapMode="none">
+                    <b>{"● " + model().health.label}</b>
+                  </text>
+                </box>
+                <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
+                  <text fg={tone(model().activity.tone)} flexShrink={1} wrapMode="none">
+                    {model().activity.parts.join(" · ")}
                   </text>
                 </box>
               </Show>
               <Show when={viewMode() === "expanded"}>
-                <For each={model().details}>
+                <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
+                  <text fg={muted()} flexShrink={1} wrapMode="none">
+                    {model().context.detailParts.join(" · ")}
+                  </text>
+                </box>
+                <For each={model().detailLines}>
                   {(row) => (
-                    <StatRow
-                      label={row.label}
-                      value={row.parts.join(" · ")}
-                      labelColor={muted()}
-                      valueColor={tone(row.tone)}
-                    />
+                    <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
+                      <text fg={tone(row.tone)} flexShrink={1} wrapMode="none">
+                        {row.parts.join(" · ")}
+                      </text>
+                      <Show when={row.cachePolicy}>
+                        <text fg={muted()} flexShrink={0} wrapMode="none">{" · cache "}</text>
+                        <text fg={tone(row.cacheTone ?? "muted")} flexShrink={0} wrapMode="none">
+                          <b>{row.cachePolicy}</b>
+                        </text>
+                      </Show>
+                    </box>
                   )}
                 </For>
               </Show>

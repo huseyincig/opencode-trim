@@ -8,7 +8,7 @@ const tsx = readFileSync(new URL("src/tui.tsx", root), "utf8")
 const peers = ["@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"]
 
 test("package exposes ./tui and keeps existing exports", () => {
-  assert.equal(pkg.version, "0.9.3")
+  assert.equal(pkg.version, "0.9.4")
   assert.deepEqual(pkg.exports["./tui"], { types: "./dist/tui.d.ts", default: "./dist/tui.js" })
   assert.deepEqual(pkg.exports["./rpc"], { types: "./dist/stats-rpc.d.ts", default: "./dist/stats-rpc.js" })
   for (const k of [".", "./core", "./prune", "./pressure"]) {
@@ -44,7 +44,7 @@ test("tui.tsx contract", () => {
   assert.doesNotMatch(tsx, /replace:\s*"/)
 })
 
-test("visual contract: borderless section, 3-mode header toggle, segmented bar, label/value rows", () => {
+test("visual contract: borderless section, 3-mode header toggle, 100% composition bar, dynamic detail lines", () => {
   assert.doesNotMatch(tsx, /\bborder\b|borderStyle|borderColor|backgroundColor|panelBg|padding/)
   assert.match(tsx, /<box flexDirection="column" flexShrink=\{0\} width="100%" gap=\{0\}>/)
   assert.match(tsx, /onMouseUp=\{toggle\}/)
@@ -55,12 +55,11 @@ test("visual contract: borderless section, 3-mode header toggle, segmented bar, 
   assert.match(tsx, /<b>Trim<\/b>/)
   assert.match(tsx, /"▼ "/)
   assert.match(tsx, /"▶ "/)
-  assert.match(tsx, /sys/)
-  assert.match(tsx, /chat/)
-  assert.match(tsx, /tools/)
+  assert.match(tsx, /composition\.sysText/)
+  assert.match(tsx, /composition\.chatText/)
+  assert.match(tsx, /composition\.toolsText/)
   assert.doesNotMatch(tsx, /row\.line/)
   assert.doesNotMatch(tsx, /"ctx"|"mem"/)
-  assert.match(tsx, /\{row\.label\}/)
   assert.match(tsx, /row\.parts\.join\(" · "\)/)
   assert.match(tsx, /flexShrink=\{1\}/)
   assert.match(tsx, /wrapMode="none"/)

@@ -1,8 +1,8 @@
 import { memo as _$memo } from "@opentui/solid";
 import { createTextNode as _$createTextNode } from "@opentui/solid";
+import { insertNode as _$insertNode } from "@opentui/solid";
 import { createComponent as _$createComponent } from "@opentui/solid";
 import { effect as _$effect } from "@opentui/solid";
-import { insertNode as _$insertNode } from "@opentui/solid";
 import { insert as _$insert } from "@opentui/solid";
 import { setProp as _$setProp } from "@opentui/solid";
 import { createElement as _$createElement } from "@opentui/solid";
@@ -16,8 +16,8 @@ import { buildHeader, buildSidebarModel, compactionBreakdown, compactionHistory,
 const DEBOUNCE_MS = 150;
 const POLL_MS = 2000;
 const MAX_HIDDEN_RETRIES = 3;
-const COLLAPSED_BAR_WIDTH = 12;
-const EXPANDED_BAR_WIDTH = 24;
+const COLLAPSED_BAR_WIDTH = 18;
+const EXPANDED_BAR_WIDTH = 32;
 const REFRESH_EVENTS = ["session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.step.ended"];
 const RELOAD_EVENTS = ["plugin.updated", "model.updated", "provider.updated"];
 function normDir(v) {
@@ -29,103 +29,61 @@ function isRpcUnavailable(err) {
   const msg = String(err?.message ?? err?.code ?? err ?? "").toLowerCase();
   return msg.includes("rpc.unavailable") || msg.includes("unavailable") || msg.includes("404") || msg.includes("not found");
 }
-function StatRow(props) {
-  return (() => {
-    var _el$ = _$createElement("box"),
-      _el$2 = _$createElement("text"),
-      _el$3 = _$createElement("text");
-    _$insertNode(_el$, _el$2);
-    _$insertNode(_el$, _el$3);
-    _$setProp(_el$, "width", "100%");
-    _$setProp(_el$, "flexDirection", "row");
-    _$setProp(_el$, "justifyContent", "space-between");
-    _$setProp(_el$2, "flexShrink", 0);
-    _$setProp(_el$2, "wrapMode", "none");
-    _$insert(_el$2, () => props.label);
-    _$setProp(_el$3, "flexShrink", 1);
-    _$setProp(_el$3, "marginLeft", 1);
-    _$setProp(_el$3, "wrapMode", "none");
-    _$insert(_el$3, () => props.value);
-    _$effect(_p$ => {
-      var _v$ = props.labelColor,
-        _v$2 = props.valueColor;
-      _v$ !== _p$.e && (_p$.e = _$setProp(_el$2, "fg", _v$, _p$.e));
-      _v$2 !== _p$.t && (_p$.t = _$setProp(_el$3, "fg", _v$2, _p$.t));
-      return _p$;
-    }, {
-      e: undefined,
-      t: undefined
-    });
-    return _el$;
-  })();
-}
 function SegmentedBar(props) {
   const s = () => props.segments;
   return (() => {
-    var _el$4 = _$createElement("box");
-    _$setProp(_el$4, "flexDirection", "row");
-    _$setProp(_el$4, "flexShrink", 1);
-    _$insert(_el$4, _$createComponent(Show, {
+    var _el$ = _$createElement("box");
+    _$setProp(_el$, "flexDirection", "row");
+    _$setProp(_el$, "flexShrink", 1);
+    _$insert(_el$, _$createComponent(Show, {
       get when() {
         return s().sys > 0;
       },
       get children() {
-        var _el$5 = _$createElement("text");
-        _$setProp(_el$5, "wrapMode", "none");
-        _$insert(_el$5, () => "█".repeat(s().sys));
-        _$effect(_$p => _$setProp(_el$5, "fg", props.sysColor, _$p));
-        return _el$5;
+        var _el$2 = _$createElement("text");
+        _$setProp(_el$2, "wrapMode", "none");
+        _$insert(_el$2, () => "█".repeat(s().sys));
+        _$effect(_$p => _$setProp(_el$2, "fg", props.sysColor, _$p));
+        return _el$2;
       }
     }), null);
-    _$insert(_el$4, _$createComponent(Show, {
+    _$insert(_el$, _$createComponent(Show, {
       get when() {
         return s().chat > 0;
       },
       get children() {
-        var _el$6 = _$createElement("text");
-        _$setProp(_el$6, "wrapMode", "none");
-        _$insert(_el$6, () => "█".repeat(s().chat));
-        _$effect(_$p => _$setProp(_el$6, "fg", props.chatColor, _$p));
-        return _el$6;
+        var _el$3 = _$createElement("text");
+        _$setProp(_el$3, "wrapMode", "none");
+        _$insert(_el$3, () => "█".repeat(s().chat));
+        _$effect(_$p => _$setProp(_el$3, "fg", props.chatColor, _$p));
+        return _el$3;
       }
     }), null);
-    _$insert(_el$4, _$createComponent(Show, {
+    _$insert(_el$, _$createComponent(Show, {
       get when() {
         return s().tools > 0;
       },
       get children() {
-        var _el$7 = _$createElement("text");
-        _$setProp(_el$7, "wrapMode", "none");
-        _$insert(_el$7, () => "█".repeat(s().tools));
-        _$effect(_$p => _$setProp(_el$7, "fg", props.toolsColor, _$p));
-        return _el$7;
+        var _el$4 = _$createElement("text");
+        _$setProp(_el$4, "wrapMode", "none");
+        _$insert(_el$4, () => "█".repeat(s().tools));
+        _$effect(_$p => _$setProp(_el$4, "fg", props.toolsColor, _$p));
+        return _el$4;
       }
     }), null);
-    _$insert(_el$4, _$createComponent(Show, {
-      get when() {
-        return s().toolsWarn > 0;
-      },
-      get children() {
-        var _el$8 = _$createElement("text");
-        _$setProp(_el$8, "wrapMode", "none");
-        _$insert(_el$8, () => "█".repeat(s().toolsWarn));
-        _$effect(_$p => _$setProp(_el$8, "fg", props.warnColor, _$p));
-        return _el$8;
-      }
-    }), null);
-    _$insert(_el$4, _$createComponent(Show, {
+    _$insert(_el$, _$createComponent(Show, {
       get when() {
         return s().empty > 0;
       },
       get children() {
-        var _el$9 = _$createElement("text");
-        _$setProp(_el$9, "wrapMode", "none");
-        _$insert(_el$9, () => "█".repeat(s().empty));
-        _$effect(_$p => _$setProp(_el$9, "fg", props.emptyColor, _$p));
-        return _el$9;
+        var _el$5 = _$createElement("text");
+        _$setProp(_el$5, "wrapMode", "none");
+        _$insert(_el$5, () => "█".repeat(s().empty));
+        _$effect(_$p => _$setProp(_el$5, "fg", props.emptyColor, _$p));
+        return _el$5;
       }
     }), null);
-    return _el$4;
+    return _el$;
   })();
 }
 export default Plugin.define({
@@ -391,7 +349,6 @@ export default Plugin.define({
         compactionBreakdown: compDetails(),
         messageBreakdown: msgBreakdown()
       }));
-      const toolsBarColor = () => model().health.state === "critical" ? errColor() : okColor();
       const collapsedSegments = createMemo(() => model().segments(COLLAPSED_BAR_WIDTH));
       const expandedSegments = createMemo(() => model().segments(EXPANDED_BAR_WIDTH));
       return _$createComponent(Show, {
@@ -399,55 +356,52 @@ export default Plugin.define({
           return visible();
         },
         get children() {
-          var _el$0 = _$createElement("box");
-          _$setProp(_el$0, "flexDirection", "column");
-          _$setProp(_el$0, "flexShrink", 0);
-          _$setProp(_el$0, "width", "100%");
-          _$setProp(_el$0, "gap", 0);
-          _$insert(_el$0, _$createComponent(Show, {
+          var _el$6 = _$createElement("box");
+          _$setProp(_el$6, "flexDirection", "column");
+          _$setProp(_el$6, "flexShrink", 0);
+          _$setProp(_el$6, "width", "100%");
+          _$setProp(_el$6, "gap", 0);
+          _$insert(_el$6, _$createComponent(Show, {
             get when() {
               return viewMode() !== "collapsed";
             },
             get fallback() {
               return (() => {
-                var _el$36 = _$createElement("box"),
-                  _el$37 = _$createElement("box"),
-                  _el$38 = _$createElement("text"),
+                var _el$38 = _$createElement("box"),
+                  _el$39 = _$createElement("box"),
                   _el$40 = _$createElement("text"),
-                  _el$41 = _$createElement("b"),
-                  _el$43 = _$createElement("box"),
-                  _el$44 = _$createElement("box"),
-                  _el$45 = _$createElement("text"),
-                  _el$46 = _$createElement("b");
-                _$insertNode(_el$36, _el$37);
-                _$insertNode(_el$36, _el$43);
-                _$insertNode(_el$36, _el$44);
-                _$setProp(_el$36, "width", "100%");
-                _$setProp(_el$36, "flexDirection", "row");
-                _$setProp(_el$36, "justifyContent", "space-between");
-                _$setProp(_el$36, "alignItems", "center");
-                _$setProp(_el$36, "flexShrink", 0);
-                _$setProp(_el$36, "onMouseUp", toggle);
-                _$insertNode(_el$37, _el$38);
-                _$insertNode(_el$37, _el$40);
-                _$setProp(_el$37, "flexDirection", "row");
-                _$setProp(_el$37, "alignItems", "center");
-                _$setProp(_el$37, "flexShrink", 0);
-                _$insertNode(_el$38, _$createTextNode(`▶ `));
-                _$setProp(_el$38, "wrapMode", "none");
-                _$insertNode(_el$40, _el$41);
+                  _el$42 = _$createElement("text"),
+                  _el$43 = _$createElement("b"),
+                  _el$45 = _$createElement("box"),
+                  _el$46 = _$createElement("box"),
+                  _el$47 = _$createElement("text"),
+                  _el$48 = _$createElement("b");
+                _$insertNode(_el$38, _el$39);
+                _$insertNode(_el$38, _el$45);
+                _$insertNode(_el$38, _el$46);
+                _$setProp(_el$38, "width", "100%");
+                _$setProp(_el$38, "flexDirection", "row");
+                _$setProp(_el$38, "justifyContent", "space-between");
+                _$setProp(_el$38, "alignItems", "center");
+                _$setProp(_el$38, "flexShrink", 0);
+                _$setProp(_el$38, "onMouseUp", toggle);
+                _$insertNode(_el$39, _el$40);
+                _$insertNode(_el$39, _el$42);
+                _$setProp(_el$39, "flexDirection", "row");
+                _$setProp(_el$39, "alignItems", "center");
+                _$setProp(_el$39, "flexShrink", 0);
+                _$insertNode(_el$40, _$createTextNode(`▶ `));
                 _$setProp(_el$40, "wrapMode", "none");
-                _$insertNode(_el$41, _$createTextNode(`Trim`));
-                _$setProp(_el$43, "flexDirection", "row");
-                _$setProp(_el$43, "alignItems", "center");
-                _$setProp(_el$43, "flexShrink", 1);
-                _$setProp(_el$43, "marginLeft", 1);
-                _$insert(_el$43, _$createComponent(SegmentedBar, {
+                _$insertNode(_el$42, _el$43);
+                _$setProp(_el$42, "wrapMode", "none");
+                _$insertNode(_el$43, _$createTextNode(`Trim`));
+                _$setProp(_el$45, "flexDirection", "row");
+                _$setProp(_el$45, "alignItems", "center");
+                _$setProp(_el$45, "flexShrink", 1);
+                _$setProp(_el$45, "marginLeft", 1);
+                _$insert(_el$45, _$createComponent(SegmentedBar, {
                   get segments() {
                     return collapsedSegments();
-                  },
-                  get health() {
-                    return model().health.state;
                   },
                   get sysColor() {
                     return sysColor();
@@ -456,136 +410,114 @@ export default Plugin.define({
                     return chatColor();
                   },
                   get toolsColor() {
-                    return toolsBarColor();
-                  },
-                  get warnColor() {
-                    return warnColor();
+                    return okColor();
                   },
                   get emptyColor() {
                     return faint();
                   }
                 }));
-                _$insertNode(_el$44, _el$45);
-                _$setProp(_el$44, "flexDirection", "row");
-                _$setProp(_el$44, "alignItems", "center");
-                _$setProp(_el$44, "flexShrink", 0);
-                _$setProp(_el$44, "marginLeft", 1);
-                _$insertNode(_el$45, _el$46);
-                _$setProp(_el$45, "wrapMode", "none");
-                _$insert(_el$46, () => model().context.percentText);
-                _$insert(_el$44, _$createComponent(Show, {
-                  get when() {
-                    return model().sessionAge;
-                  },
-                  get children() {
-                    var _el$47 = _$createElement("text");
-                    _$setProp(_el$47, "wrapMode", "none");
-                    _$insert(_el$47, () => " " + model().sessionAge);
-                    _$effect(_$p => _$setProp(_el$47, "fg", muted(), _$p));
-                    return _el$47;
-                  }
-                }), null);
-                _$insert(_el$44, _$createComponent(Show, {
+                _$insertNode(_el$46, _el$47);
+                _$setProp(_el$46, "flexDirection", "row");
+                _$setProp(_el$46, "alignItems", "center");
+                _$setProp(_el$46, "flexShrink", 0);
+                _$setProp(_el$46, "marginLeft", 1);
+                _$insertNode(_el$47, _el$48);
+                _$setProp(_el$47, "wrapMode", "none");
+                _$insert(_el$48, () => model().context.percentText);
+                _$insert(_el$46, _$createComponent(Show, {
                   get when() {
                     return header().marker;
                   },
                   get children() {
-                    var _el$48 = _$createElement("text");
-                    _$setProp(_el$48, "wrapMode", "none");
-                    _$insert(_el$48, () => " " + header().marker);
-                    _$effect(_$p => _$setProp(_el$48, "fg", tone("warning"), _$p));
-                    return _el$48;
+                    var _el$49 = _$createElement("text");
+                    _$setProp(_el$49, "wrapMode", "none");
+                    _$insert(_el$49, () => " " + header().marker);
+                    _$effect(_$p => _$setProp(_el$49, "fg", tone("warning"), _$p));
+                    return _el$49;
                   }
                 }), null);
                 _$effect(_p$ => {
                   var _v$10 = muted(),
                     _v$11 = base(),
                     _v$12 = tone(model().health.tone);
-                  _v$10 !== _p$.e && (_p$.e = _$setProp(_el$38, "fg", _v$10, _p$.e));
-                  _v$11 !== _p$.t && (_p$.t = _$setProp(_el$40, "fg", _v$11, _p$.t));
-                  _v$12 !== _p$.a && (_p$.a = _$setProp(_el$45, "fg", _v$12, _p$.a));
+                  _v$10 !== _p$.e && (_p$.e = _$setProp(_el$40, "fg", _v$10, _p$.e));
+                  _v$11 !== _p$.t && (_p$.t = _$setProp(_el$42, "fg", _v$11, _p$.t));
+                  _v$12 !== _p$.a && (_p$.a = _$setProp(_el$47, "fg", _v$12, _p$.a));
                   return _p$;
                 }, {
                   e: undefined,
                   t: undefined,
                   a: undefined
                 });
-                return _el$36;
+                return _el$38;
               })();
             },
             get children() {
               return [(() => {
-                var _el$1 = _$createElement("box"),
-                  _el$10 = _$createElement("box"),
-                  _el$11 = _$createElement("text"),
-                  _el$13 = _$createElement("text"),
-                  _el$14 = _$createElement("b"),
-                  _el$16 = _$createElement("box"),
-                  _el$17 = _$createElement("text");
+                var _el$7 = _$createElement("box"),
+                  _el$8 = _$createElement("box"),
+                  _el$9 = _$createElement("text"),
+                  _el$1 = _$createElement("text"),
+                  _el$10 = _$createElement("b"),
+                  _el$12 = _$createElement("box"),
+                  _el$13 = _$createElement("text");
+                _$insertNode(_el$7, _el$8);
+                _$insertNode(_el$7, _el$12);
+                _$setProp(_el$7, "width", "100%");
+                _$setProp(_el$7, "flexDirection", "row");
+                _$setProp(_el$7, "justifyContent", "space-between");
+                _$setProp(_el$7, "alignItems", "center");
+                _$setProp(_el$7, "flexShrink", 0);
+                _$setProp(_el$7, "onMouseUp", toggle);
+                _$insertNode(_el$8, _el$9);
+                _$insertNode(_el$8, _el$1);
+                _$setProp(_el$8, "flexDirection", "row");
+                _$setProp(_el$8, "alignItems", "center");
+                _$insertNode(_el$9, _$createTextNode(`▼ `));
+                _$setProp(_el$9, "wrapMode", "none");
                 _$insertNode(_el$1, _el$10);
-                _$insertNode(_el$1, _el$16);
-                _$setProp(_el$1, "width", "100%");
-                _$setProp(_el$1, "flexDirection", "row");
-                _$setProp(_el$1, "justifyContent", "space-between");
-                _$setProp(_el$1, "alignItems", "center");
-                _$setProp(_el$1, "flexShrink", 0);
-                _$setProp(_el$1, "onMouseUp", toggle);
-                _$insertNode(_el$10, _el$11);
-                _$insertNode(_el$10, _el$13);
-                _$setProp(_el$10, "flexDirection", "row");
-                _$setProp(_el$10, "alignItems", "center");
-                _$insertNode(_el$11, _$createTextNode(`▼ `));
-                _$setProp(_el$11, "wrapMode", "none");
-                _$insertNode(_el$13, _el$14);
+                _$setProp(_el$1, "wrapMode", "none");
+                _$insertNode(_el$10, _$createTextNode(`Trim`));
+                _$insertNode(_el$12, _el$13);
+                _$setProp(_el$12, "flexDirection", "row");
+                _$setProp(_el$12, "alignItems", "center");
                 _$setProp(_el$13, "wrapMode", "none");
-                _$insertNode(_el$14, _$createTextNode(`Trim`));
-                _$insertNode(_el$16, _el$17);
-                _$setProp(_el$16, "flexDirection", "row");
-                _$setProp(_el$16, "alignItems", "center");
-                _$setProp(_el$17, "wrapMode", "none");
-                _$insert(_el$17, "v" + TRIM_VERSION);
-                _$insert(_el$16, _$createComponent(Show, {
+                _$insert(_el$13, "v" + TRIM_VERSION);
+                _$insert(_el$12, _$createComponent(Show, {
                   get when() {
                     return header().marker;
                   },
                   get children() {
-                    var _el$18 = _$createElement("text");
-                    _$setProp(_el$18, "wrapMode", "none");
-                    _$insert(_el$18, () => " " + header().marker);
-                    _$effect(_$p => _$setProp(_el$18, "fg", tone("warning"), _$p));
-                    return _el$18;
+                    var _el$14 = _$createElement("text");
+                    _$setProp(_el$14, "wrapMode", "none");
+                    _$insert(_el$14, () => " " + header().marker);
+                    _$effect(_$p => _$setProp(_el$14, "fg", tone("warning"), _$p));
+                    return _el$14;
                   }
                 }), null);
                 _$effect(_p$ => {
-                  var _v$3 = muted(),
-                    _v$4 = base(),
-                    _v$5 = muted();
-                  _v$3 !== _p$.e && (_p$.e = _$setProp(_el$11, "fg", _v$3, _p$.e));
-                  _v$4 !== _p$.t && (_p$.t = _$setProp(_el$13, "fg", _v$4, _p$.t));
-                  _v$5 !== _p$.a && (_p$.a = _$setProp(_el$17, "fg", _v$5, _p$.a));
+                  var _v$ = muted(),
+                    _v$2 = base(),
+                    _v$3 = muted();
+                  _v$ !== _p$.e && (_p$.e = _$setProp(_el$9, "fg", _v$, _p$.e));
+                  _v$2 !== _p$.t && (_p$.t = _$setProp(_el$1, "fg", _v$2, _p$.t));
+                  _v$3 !== _p$.a && (_p$.a = _$setProp(_el$13, "fg", _v$3, _p$.a));
                   return _p$;
                 }, {
                   e: undefined,
                   t: undefined,
                   a: undefined
                 });
-                return _el$1;
+                return _el$7;
               })(), (() => {
-                var _el$19 = _$createElement("box"),
-                  _el$20 = _$createElement("text"),
-                  _el$21 = _$createElement("b");
-                _$insertNode(_el$19, _el$20);
-                _$setProp(_el$19, "width", "100%");
-                _$setProp(_el$19, "flexDirection", "row");
-                _$setProp(_el$19, "justifyContent", "space-between");
-                _$setProp(_el$19, "alignItems", "center");
-                _$setProp(_el$19, "flexShrink", 0);
-                _$insert(_el$19, _$createComponent(SegmentedBar, {
+                var _el$15 = _$createElement("box");
+                _$setProp(_el$15, "width", "100%");
+                _$setProp(_el$15, "flexDirection", "row");
+                _$setProp(_el$15, "alignItems", "center");
+                _$setProp(_el$15, "flexShrink", 0);
+                _$insert(_el$15, _$createComponent(SegmentedBar, {
                   get segments() {
                     return expandedSegments();
-                  },
-                  get health() {
-                    return model().health.state;
                   },
                   get sysColor() {
                     return sysColor();
@@ -594,148 +526,210 @@ export default Plugin.define({
                     return chatColor();
                   },
                   get toolsColor() {
-                    return toolsBarColor();
-                  },
-                  get warnColor() {
-                    return warnColor();
+                    return okColor();
                   },
                   get emptyColor() {
                     return faint();
                   }
-                }), _el$20);
-                _$insertNode(_el$20, _el$21);
-                _$setProp(_el$20, "flexShrink", 0);
-                _$setProp(_el$20, "marginLeft", 1);
-                _$setProp(_el$20, "wrapMode", "none");
-                _$insert(_el$21, () => model().context.percentText);
-                _$effect(_$p => _$setProp(_el$20, "fg", tone(model().health.tone), _$p));
-                return _el$19;
+                }));
+                return _el$15;
               })(), (() => {
-                var _el$22 = _$createElement("box"),
-                  _el$23 = _$createElement("box"),
+                var _el$16 = _$createElement("box"),
+                  _el$17 = _$createElement("box"),
+                  _el$18 = _$createElement("text"),
+                  _el$20 = _$createElement("text"),
+                  _el$21 = _$createElement("box"),
+                  _el$22 = _$createElement("text"),
                   _el$24 = _$createElement("text"),
+                  _el$25 = _$createElement("box"),
                   _el$26 = _$createElement("text"),
-                  _el$28 = _$createElement("text"),
-                  _el$30 = _$createElement("text");
-                _$insertNode(_el$22, _el$23);
-                _$insertNode(_el$22, _el$30);
-                _$setProp(_el$22, "width", "100%");
-                _$setProp(_el$22, "flexDirection", "row");
-                _$setProp(_el$22, "justifyContent", "space-between");
-                _$setProp(_el$22, "alignItems", "center");
-                _$setProp(_el$22, "flexShrink", 0);
-                _$insertNode(_el$23, _el$24);
-                _$insertNode(_el$23, _el$26);
-                _$insertNode(_el$23, _el$28);
-                _$setProp(_el$23, "flexDirection", "row");
-                _$setProp(_el$23, "alignItems", "center");
-                _$setProp(_el$23, "flexShrink", 0);
-                _$insertNode(_el$24, _$createTextNode(`sys`));
+                  _el$28 = _$createElement("text");
+                _$insertNode(_el$16, _el$17);
+                _$insertNode(_el$16, _el$21);
+                _$insertNode(_el$16, _el$25);
+                _$setProp(_el$16, "width", "100%");
+                _$setProp(_el$16, "flexDirection", "row");
+                _$setProp(_el$16, "justifyContent", "space-between");
+                _$setProp(_el$16, "alignItems", "center");
+                _$setProp(_el$16, "flexShrink", 0);
+                _$insertNode(_el$17, _el$18);
+                _$insertNode(_el$17, _el$20);
+                _$setProp(_el$17, "flexDirection", "row");
+                _$setProp(_el$17, "alignItems", "center");
+                _$setProp(_el$17, "flexShrink", 0);
+                _$insertNode(_el$18, _$createTextNode(`sys `));
+                _$setProp(_el$18, "wrapMode", "none");
+                _$setProp(_el$20, "wrapMode", "none");
+                _$insert(_el$20, () => model().composition.sysText);
+                _$insertNode(_el$21, _el$22);
+                _$insertNode(_el$21, _el$24);
+                _$setProp(_el$21, "flexDirection", "row");
+                _$setProp(_el$21, "alignItems", "center");
+                _$setProp(_el$21, "flexShrink", 0);
+                _$insertNode(_el$22, _$createTextNode(`chat `));
+                _$setProp(_el$22, "wrapMode", "none");
                 _$setProp(_el$24, "wrapMode", "none");
-                _$insertNode(_el$26, _$createTextNode(`  chat`));
+                _$insert(_el$24, () => model().composition.chatText);
+                _$insertNode(_el$25, _el$26);
+                _$insertNode(_el$25, _el$28);
+                _$setProp(_el$25, "flexDirection", "row");
+                _$setProp(_el$25, "alignItems", "center");
+                _$setProp(_el$25, "flexShrink", 0);
+                _$insertNode(_el$26, _$createTextNode(`tools `));
                 _$setProp(_el$26, "wrapMode", "none");
-                _$insertNode(_el$28, _$createTextNode(`  tools`));
                 _$setProp(_el$28, "wrapMode", "none");
-                _$setProp(_el$30, "flexShrink", 1);
-                _$setProp(_el$30, "marginLeft", 1);
-                _$setProp(_el$30, "wrapMode", "none");
-                _$insert(_el$30, () => model().context.pairText);
+                _$insert(_el$28, () => model().composition.toolsText);
                 _$effect(_p$ => {
-                  var _v$6 = sysColor(),
-                    _v$7 = chatColor(),
+                  var _v$4 = sysColor(),
+                    _v$5 = base(),
+                    _v$6 = chatColor(),
+                    _v$7 = base(),
                     _v$8 = okColor(),
                     _v$9 = base();
-                  _v$6 !== _p$.e && (_p$.e = _$setProp(_el$24, "fg", _v$6, _p$.e));
-                  _v$7 !== _p$.t && (_p$.t = _$setProp(_el$26, "fg", _v$7, _p$.t));
-                  _v$8 !== _p$.a && (_p$.a = _$setProp(_el$28, "fg", _v$8, _p$.a));
-                  _v$9 !== _p$.o && (_p$.o = _$setProp(_el$30, "fg", _v$9, _p$.o));
+                  _v$4 !== _p$.e && (_p$.e = _$setProp(_el$18, "fg", _v$4, _p$.e));
+                  _v$5 !== _p$.t && (_p$.t = _$setProp(_el$20, "fg", _v$5, _p$.t));
+                  _v$6 !== _p$.a && (_p$.a = _$setProp(_el$22, "fg", _v$6, _p$.a));
+                  _v$7 !== _p$.o && (_p$.o = _$setProp(_el$24, "fg", _v$7, _p$.o));
+                  _v$8 !== _p$.i && (_p$.i = _$setProp(_el$26, "fg", _v$8, _p$.i));
+                  _v$9 !== _p$.n && (_p$.n = _$setProp(_el$28, "fg", _v$9, _p$.n));
                   return _p$;
                 }, {
                   e: undefined,
                   t: undefined,
                   a: undefined,
-                  o: undefined
+                  o: undefined,
+                  i: undefined,
+                  n: undefined
                 });
-                return _el$22;
+                return _el$16;
               })(), _$createComponent(Show, {
                 get when() {
                   return viewMode() === "default";
                 },
                 get children() {
-                  var _el$31 = _$createElement("box"),
-                    _el$32 = _$createElement("box"),
-                    _el$33 = _$createElement("text"),
-                    _el$34 = _$createElement("text");
-                  _$insertNode(_el$31, _el$32);
-                  _$insertNode(_el$31, _el$34);
-                  _$setProp(_el$31, "width", "100%");
-                  _$setProp(_el$31, "flexDirection", "row");
-                  _$setProp(_el$31, "justifyContent", "space-between");
-                  _$setProp(_el$31, "alignItems", "center");
-                  _$setProp(_el$31, "flexShrink", 0);
-                  _$insertNode(_el$32, _el$33);
-                  _$setProp(_el$32, "flexDirection", "row");
-                  _$setProp(_el$32, "alignItems", "center");
-                  _$setProp(_el$32, "flexShrink", 0);
-                  _$setProp(_el$33, "wrapMode", "none");
-                  _$insert(_el$33, () => "● " + model().health.label);
-                  _$setProp(_el$34, "flexShrink", 1);
-                  _$setProp(_el$34, "marginLeft", 1);
-                  _$setProp(_el$34, "wrapMode", "none");
-                  _$insert(_el$34, () => model().statusRight.parts.join(" · "));
-                  _$effect(_p$ => {
-                    var _v$0 = tone(model().health.tone),
-                      _v$1 = tone(model().statusRight.tone);
-                    _v$0 !== _p$.e && (_p$.e = _$setProp(_el$33, "fg", _v$0, _p$.e));
-                    _v$1 !== _p$.t && (_p$.t = _$setProp(_el$34, "fg", _v$1, _p$.t));
-                    return _p$;
-                  }, {
-                    e: undefined,
-                    t: undefined
-                  });
-                  return _el$31;
+                  return [(() => {
+                    var _el$29 = _$createElement("box"),
+                      _el$30 = _$createElement("text"),
+                      _el$31 = _$createElement("text"),
+                      _el$32 = _$createElement("b");
+                    _$insertNode(_el$29, _el$30);
+                    _$insertNode(_el$29, _el$31);
+                    _$setProp(_el$29, "width", "100%");
+                    _$setProp(_el$29, "flexDirection", "row");
+                    _$setProp(_el$29, "alignItems", "center");
+                    _$setProp(_el$29, "flexShrink", 0);
+                    _$setProp(_el$30, "flexShrink", 1);
+                    _$setProp(_el$30, "wrapMode", "none");
+                    _$insert(_el$30, () => model().context.parts.join(" · "));
+                    _$insertNode(_el$31, _el$32);
+                    _$setProp(_el$31, "flexShrink", 0);
+                    _$setProp(_el$31, "marginLeft", 2);
+                    _$setProp(_el$31, "wrapMode", "none");
+                    _$insert(_el$32, () => "● " + model().health.label);
+                    _$effect(_p$ => {
+                      var _v$0 = muted(),
+                        _v$1 = tone(model().health.tone);
+                      _v$0 !== _p$.e && (_p$.e = _$setProp(_el$30, "fg", _v$0, _p$.e));
+                      _v$1 !== _p$.t && (_p$.t = _$setProp(_el$31, "fg", _v$1, _p$.t));
+                      return _p$;
+                    }, {
+                      e: undefined,
+                      t: undefined
+                    });
+                    return _el$29;
+                  })(), (() => {
+                    var _el$33 = _$createElement("box"),
+                      _el$34 = _$createElement("text");
+                    _$insertNode(_el$33, _el$34);
+                    _$setProp(_el$33, "width", "100%");
+                    _$setProp(_el$33, "flexDirection", "row");
+                    _$setProp(_el$33, "alignItems", "center");
+                    _$setProp(_el$33, "flexShrink", 0);
+                    _$setProp(_el$34, "flexShrink", 1);
+                    _$setProp(_el$34, "wrapMode", "none");
+                    _$insert(_el$34, () => model().activity.parts.join(" · "));
+                    _$effect(_$p => _$setProp(_el$34, "fg", tone(model().activity.tone), _$p));
+                    return _el$33;
+                  })()];
                 }
               }), _$createComponent(Show, {
                 get when() {
                   return viewMode() === "expanded";
                 },
                 get children() {
-                  return _$createComponent(For, {
+                  return [(() => {
+                    var _el$35 = _$createElement("box"),
+                      _el$36 = _$createElement("text");
+                    _$insertNode(_el$35, _el$36);
+                    _$setProp(_el$35, "width", "100%");
+                    _$setProp(_el$35, "flexDirection", "row");
+                    _$setProp(_el$35, "alignItems", "center");
+                    _$setProp(_el$35, "flexShrink", 0);
+                    _$setProp(_el$36, "flexShrink", 1);
+                    _$setProp(_el$36, "wrapMode", "none");
+                    _$insert(_el$36, () => model().context.detailParts.join(" · "));
+                    _$effect(_$p => _$setProp(_el$36, "fg", muted(), _$p));
+                    return _el$35;
+                  })(), _$createComponent(For, {
                     get each() {
-                      return model().details;
+                      return model().detailLines;
                     },
-                    children: row => _$createComponent(StatRow, {
-                      get label() {
-                        return row.label;
-                      },
-                      get value() {
-                        return row.parts.join(" · ");
-                      },
-                      get labelColor() {
-                        return muted();
-                      },
-                      get valueColor() {
-                        return tone(row.tone);
-                      }
-                    })
-                  });
+                    children: row => (() => {
+                      var _el$50 = _$createElement("box"),
+                        _el$51 = _$createElement("text");
+                      _$insertNode(_el$50, _el$51);
+                      _$setProp(_el$50, "width", "100%");
+                      _$setProp(_el$50, "flexDirection", "row");
+                      _$setProp(_el$50, "alignItems", "center");
+                      _$setProp(_el$50, "flexShrink", 0);
+                      _$setProp(_el$51, "flexShrink", 1);
+                      _$setProp(_el$51, "wrapMode", "none");
+                      _$insert(_el$51, () => row.parts.join(" · "));
+                      _$insert(_el$50, _$createComponent(Show, {
+                        get when() {
+                          return row.cachePolicy;
+                        },
+                        get children() {
+                          return [(() => {
+                            var _el$52 = _$createElement("text");
+                            _$insertNode(_el$52, _$createTextNode(` · cache `));
+                            _$setProp(_el$52, "flexShrink", 0);
+                            _$setProp(_el$52, "wrapMode", "none");
+                            _$effect(_$p => _$setProp(_el$52, "fg", muted(), _$p));
+                            return _el$52;
+                          })(), (() => {
+                            var _el$54 = _$createElement("text"),
+                              _el$55 = _$createElement("b");
+                            _$insertNode(_el$54, _el$55);
+                            _$setProp(_el$54, "flexShrink", 0);
+                            _$setProp(_el$54, "wrapMode", "none");
+                            _$insert(_el$55, () => row.cachePolicy);
+                            _$effect(_$p => _$setProp(_el$54, "fg", tone(row.cacheTone ?? "muted"), _$p));
+                            return _el$54;
+                          })()];
+                        }
+                      }), null);
+                      _$effect(_$p => _$setProp(_el$51, "fg", tone(row.tone), _$p));
+                      return _el$50;
+                    })()
+                  })];
                 }
               }), _$createComponent(Show, {
                 get when() {
                   return stale();
                 },
                 get children() {
-                  var _el$35 = _$createElement("text");
-                  _$setProp(_el$35, "flexShrink", 1);
-                  _$setProp(_el$35, "wrapMode", "none");
-                  _$insert(_el$35, () => failed() ? "stats unavailable" : "stats stale");
-                  _$effect(_$p => _$setProp(_el$35, "fg", theme?.text?.faint ?? muted(), _$p));
-                  return _el$35;
+                  var _el$37 = _$createElement("text");
+                  _$setProp(_el$37, "flexShrink", 1);
+                  _$setProp(_el$37, "wrapMode", "none");
+                  _$insert(_el$37, () => failed() ? "stats unavailable" : "stats stale");
+                  _$effect(_$p => _$setProp(_el$37, "fg", theme?.text?.faint ?? muted(), _$p));
+                  return _el$37;
                 }
               })];
             }
           }));
-          return _el$0;
+          return _el$6;
         }
       });
     }

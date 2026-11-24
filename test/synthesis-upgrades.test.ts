@@ -1947,3 +1947,22 @@ test('Step 18c: with no step.ended seen yet, real tokens are seeded once from ct
   assert.equal(ctxReads, 1, 'seeded exactly once per session, not every turn');
   assert.equal(compactCalls.length, 0);
 });
+
+test('Step 19: setupTrim never blocks plugin boot waiting for ctx.model.list()', async () => {
+  let resolveModels: ((v: any) => void) | null = null;
+  const ctx = {
+    options: { maxTokens: '350k', tui: { enabled: false }, memory: { enabled: false } },
+    model: { list: () => new Promise((r) => { resolveModels = r; }) },
+    tool: { hook: async () => ({ dispose: async () => {} }) },
+    session: { hook: async () => ({ dispose: async () => {} }) },
+  };
+  const t0 = Date.now();
+  const stop = await setupTrim(ctx);
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed < 100, `setupTrim should not block on ctx.model.list(), took ${elapsed}ms`);
+  assert.ok(typeof resolveModels === 'function', 'background prewarm started');
+  await stop();
+  // Resolving after dispose must be a safe no-op.
+  (resolveModels as any)({ data: [{ providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 16_000 } }] });
+  await new Promise((r) => setTimeout(r, 10));
+});

@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/opencode-trim?color=blue&logo=npm&logoColor=white)](https://www.npmjs.com/package/opencode-trim)
 [![OpenCode: V2 (>=2.3.0)](https://img.shields.io/badge/OpenCode-V2%20(%3E%3D2.3.0)-10b981?logo=terminal&logoColor=white)](https://opencode.ai)
 [![V2 host baseline](https://img.shields.io/badge/Host%20baseline-v2.4.1%20verified-10b981?logo=checkmarx&logoColor=white)](AUDIT.md)
-[![Tests: 527/527 Passing](https://img.shields.io/badge/Tests-527%2F527%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
+[![Tests: 528/528 Passing](https://img.shields.io/badge/Tests-528%2F528%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
 [![Node.js](https://img.shields.io/badge/node-%5E26.0.0-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -18,16 +18,16 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 
 ## 📊 Verification & Live Acceptance
 
-> OpenCode Trim **v0.9.3** was verified on **24 November 2026** against **OpenCode V2 (`v2.4.1`, `>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
+> OpenCode Trim **v0.9.4** was verified on **24 November 2026** against **OpenCode V2 (`v2.4.1`, `>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
 
-- **Current Automated Verification:** **527 / 527** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, bounded secret-redacted recoverable vault, real provider token accounting (`session.step.ended`), 2-stage auto-compaction fallback, OpenCode `v2.4.1` non-blocking startup/Code Mode, and 3-mode TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
+- **Current Automated Verification:** **528 / 528** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, SQLite FTS5 memory, bounded secret-redacted recoverable vault, real provider token accounting (`session.step.ended`), non-blocking startup prewarm, 2-stage auto-compaction fallback, OpenCode `v2.4.1` Code Mode, and dynamic 3-mode TUI view-model tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
 - **Deterministic Compression & Pruning Benchmark (`npm run bench`):**
   - **24 Command Families:** `1,801,616 B` input → `2,483 B` output (`≈99.86%` reduction on the adversarial progress/noise corpus, `allChanged: true`, per-family median **0.04–0.20 ms** with RAM LRU memoization).
   - **Context Pruning:** `388 / 400` eligible historical tool results pruned (`757,266` characters / `≈252,422` estimated tokens reclaimed, median `≈7 ms`).
 - **Packed Tarball & Dual-Runtime Verification:** `npm pack` `.tgz` artifact verified in isolated Node **26.13.1** and Bun **1.4.4** sandboxes across `.`, `./tui`, `./rpc`, `./core`, `./prune`, and `./pressure` entrypoints.
 - **Live OpenCode V2 Host Acceptance:** Verified plugin load, `tool.execute.after` shell compression, `session.context` pruning, real-provider compression/pruning (`opencode-go/deepseek-v4.1-flash` and `opencode-go/beam-free`), SQLite FTS5 compaction archiving & `trim_history_search`, multi-location fail-closed isolation, and TUI sidebar rendering across 80–200 column widths.
 
-Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.9.3 release notes](CHANGELOG.md) for the latest changes.
+Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.9.4 release notes](CHANGELOG.md) for the latest changes.
 
 ---
 
@@ -49,7 +49,7 @@ Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for repr
 
 ## 📦 Installation
 
-The current version is **0.9.3** (OpenCode **V2 `>=2.3.0`**, verified on **`v2.4.1`**, Node.js **`^26.0.0`**).
+The current version is **0.9.4** (OpenCode **V2 `>=2.3.0`**, verified on **`v2.4.1`**, Node.js **`^26.0.0`**).
 
 OpenCode Trim supports **Global**, **Project-Local**, **`.opencode/plugins/` Local Wrapper / Symlink**, **Local Development (`file://`)**, and **Remote TUI Client (`cli.json`)** installation modes.
 
@@ -76,7 +76,7 @@ Or pin an exact version and configure optional features (such as the TUI sidebar
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     [
-      "opencode-trim@0.9.3",
+      "opencode-trim@0.9.4",
       {
         "maxTokens": "350k",
         "tui": {
@@ -292,39 +292,39 @@ Because OpenCode V2 auto-discovers `./tui` from `package.json`, the sidebar uses
 }
 ```
 
-### 🔽 Open / Default View
+### 🔽 Open / Normal View (Default)
 
 ```text
-▼ Trim                     v0.9.3
-███████████░░░░░░░░░░░░░      14%
-sys  chat  tools          140k/1M
-● healthy       1 compact · 12m ago
+▼ Trim                             v0.9.4
+████████████████████████████████
+sys 10%         chat 24%        tools 66%
+context 106k/1M · 11%   ● healthy
+1 compact · 12m ago
 ```
 
-- **Header:** Clickable 3-mode disclosure header cycling **Default → Expanded → Collapsed** (`▼ Trim` / `▶ Trim`), current version (`v0.9.3`), and status marker (`!` when stale, `?` before first snapshot).
-- **Segmented Context Bar:** Single-row color-coded `sys` (purple) / `chat` (cyan) / `tools` (green → caution yellow → critical red) breakdown over the model window, matching OpenCode's native `input + cache.read` count.
-- **Health Status (`● healthy` / `● caution` / `● critical`):** Evaluates both the model window and any active `maxTokens` cap (e.g. `350k`), displaying `1 compact · 12m ago`, active savings, `compacting...`, or `compact recommended`.
+- **Header:** Clickable 3-mode disclosure header cycling **Normal → Detail → Minimal** (`▼ Trim` / `▶ Trim`), current version (`v0.9.4`), and status marker (`!` when stale, `?` before first snapshot).
+- **100%-Filled 3-Color Composition Bar:** Always fills 100% of the bar width with `sys` (purple), `chat` (cyan), and `tools` (green) estimated character shares, with aligned `sys X%` / `chat Y%` / `tools Z%` percentages directly underneath (`sys + chat + tools = 100%`).
+- **Dynamic Context & Health (`● healthy` / `● caution` / `● critical`):** Shown separately from the composition bar and adapts automatically to the user's active configuration (`maxTokens` / `pruneAt` cap when active, or full model window otherwise, evaluated against configured `pressureStartRatio` / `pressureForceRatio`).
 
 ### 🔼 Expanded / Detail View & Minimal Collapsed View
 
 Clicking the `Trim` header cycles to the detailed breakdown and then to the 1-line minimal bar:
 
 ```text
-▼ Trim                     v0.9.3
-███████████░░░░░░░░░░░░░      14%
-sys  chat  tools          140k/1M
-session                       14d
-compactions            1 (manual)
-saved          5.7k drops · -18M
-cache                      stable
-memory          120 sum · 45 vault
+▼ Trim                             v0.9.4
+████████████████████████████████
+sys 10%         chat 24%        tools 66%
+context 106k/1M · 11%
+session 14d · 1 manual compact
+saved -18M chars · cache stable
+memory 3 summaries · 12 vault
 ```
 
 ```text
-▶ Trim  ████░░░░░░░░  14%  14d
+▶ Trim  ██████████████████  11%
 ```
 
-- **Session vs. Project Separation:** `session` (from host `session.time.created`), `cap` (shown when `maxTokens` caps a larger window), `compactions`, `saved`, and `cache` stay strictly session-scoped; `memory` shows project-scoped summaries and vault refs.
+- **Config-Driven & Session vs. Project Separation:** `session` (host `session.time.created`), `compactions`, `saved`, and `cache` (hidden when `pruning: false`) stay strictly session-scoped; `memory` appears only when `memory.enabled: true` (or reporting an error) and displays project-wide summaries and vault refs.
 - **Restart-Resilient DB & Host Fallback:** When live in-memory counters reset on server restart, the sidebar hydrates real session compaction counts/ages and session `vault` savings from persisted host messages and SQLite `memory.db` (`sidebarStats`).
 - **Privacy-Safe RPC (`opencode-trim-stats`):** Snapshots carry only numeric counters, character breakdowns, and enum states — never file paths, commands, queries, prompt text, or model names.
 
@@ -475,8 +475,8 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 Run the full verification suite locally:
 
 ```bash
-npm run check     # Strict tsc --noEmit, dist/ build, 94-file syntax check + 527 tests
-npm test          # Node.js test runner (527 tests across 28 suites)
+npm run check     # Strict tsc --noEmit, dist/ build, 94-file syntax check + 528 tests
+npm test          # Node.js test runner (528 tests across 28 suites)
 npm run bench     # Deterministic 24-family compression & 800-message pruning benchmark
 npm run pack:dry  # Verify packed npm tarball contents (147 files)
 ```

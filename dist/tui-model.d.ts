@@ -13,7 +13,7 @@ export declare function compactionHistory(messages: unknown): {
     lastAt: number | null;
     lastReason: string | null;
 } | null;
-export declare const TRIM_VERSION = "0.9.3";
+export declare const TRIM_VERSION = "0.9.4";
 export declare const SECTION_TITLES: Record<string, string>;
 export declare function buildRows(raw: any, now?: number, options?: any): any[];
 export declare function buildSections(raw: any, now?: number, options?: any): any[];
@@ -45,15 +45,24 @@ export interface BarSegments {
     sys: number;
     chat: number;
     tools: number;
-    toolsWarn: number;
     empty: number;
 }
-export interface SidebarDetailRow {
+export interface CompositionShares {
+    known: boolean;
+    sysPct: number | null;
+    chatPct: number | null;
+    toolsPct: number | null;
+    sysText: string;
+    chatText: string;
+    toolsText: string;
+}
+export interface SidebarDetailLine {
     key: string;
-    label: string;
     parts: string[];
-    value: string;
+    text: string;
     tone: string;
+    cachePolicy?: string | null;
+    cacheTone?: string;
 }
 export declare function normalizeViewMode(stored: any): TrimViewMode;
 export declare function nextViewMode(mode: TrimViewMode): TrimViewMode;
@@ -66,7 +75,8 @@ export declare function compactionBreakdown(messages: unknown): {
     lastAt: number | null;
     lastReason: string | null;
 } | null;
-export declare function computeBarSegments(barRatio: number | null, breakdown: SidebarBreakdown | null, width?: number, health?: HealthState): BarSegments;
+export declare function computeBarSegments(breakdown: SidebarBreakdown | null, width?: number): BarSegments;
+export declare function computeCompositionShares(breakdown: SidebarBreakdown | null): CompositionShares;
 export declare function buildSidebarModel(raw: any, now?: number, options?: any): {
     hasData: boolean;
     context: {
@@ -76,25 +86,25 @@ export declare function buildSidebarModel(raw: any, now?: number, options?: any)
         usedText: string;
         limitText: string;
         pairText: string;
-        barRatio: number | null;
-        effectiveRatio: any;
+        ratio: any;
         over: number;
-        overText: string | null;
-        capTokens: any;
-        capRatio: number | null;
-        capText: string | null;
+        isCapped: boolean;
+        modelLimitText: string | null;
+        parts: string[];
+        detailParts: string[];
     };
+    composition: CompositionShares;
     health: {
         state: HealthState;
         label: HealthState;
         tone: string;
     };
     sessionAge: string | null;
-    statusRight: {
+    activity: {
         parts: string[];
         text: string;
         tone: string;
     };
-    details: SidebarDetailRow[];
+    detailLines: SidebarDetailLine[];
     segments: (width: number) => BarSegments;
 };

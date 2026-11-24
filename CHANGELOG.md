@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.4 — 2026-11-24
+
+- **Separated 100%-Filled Composition Bar & Dynamic Config-Driven TUI Sidebar (`src/tui-model.ts`, `src/tui.tsx`, `src/stats.ts`)**:
+  - Decoupled the 3-color composition bar (`sys` purple, `chat` cyan, `tools` green — always 100% filled with aligned `sys X%` / `chat Y%` / `tools Z%` percentages underneath summing strictly to `100%`) from context capacity and health status.
+  - Displayed context fill and `● healthy` / `● caution` / `● critical` on a dedicated line dynamically matching each user's active configuration (active `maxTokens` / `pruneAt` cap when smaller than the model window, or full model window otherwise, using configured `pressureStartRatio` / `pressureForceRatio`).
+  - Made detail lines (`context`, `session`, `saved` + optional `cache`, and optional `memory`) strictly config-driven across all 3 click-cycled modes (**Normal**, **Detail**, **Minimal**).
+- **Non-Blocking Startup Model Catalog Prewarm (`src/plugin.ts`)**:
+  - Moved `discoverModelLimits(ctx)` during `setupTrim()` to a non-blocking background prewarm with `disposed` guard so plugin boot never stalls waiting on `ctx.model.list()` (while `ensureModelLimit()` remains lazy on first request).
+- **Verification**: **`528 / 528`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked against `@opencode/plugin@2.4.1`, `@opentui/core@0.9.9`, and `@opentui/solid@0.9.9`.
+
 ## 0.9.3 — 2026-11-24
 
 - **Authoritative Real Provider Token Math (`session.step.ended`) (`src/plugin.ts`, `src/pressure.ts`)**:

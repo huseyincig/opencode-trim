@@ -466,7 +466,16 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
       stats=createTrimStats({options:opts,emit:(sessionID: string, revision: number)=>rpcReg?.events?.emit?.('changed',{sessionID,revision})});
     }catch{stats=null;}
   }
-  const modelLimits=(opts.pruning||stats)?await discoverModelLimits(ctx):new Map();
+  let disposed=false;
+  const modelLimits=new Map<string, any>();
+  if(opts.pruning||stats){
+    // Non-blocking catalog prewarm (v2.4.0+ startup): never stall plugin boot on ctx.model.list();
+    // ensureModelLimit() fills any missing model lazily on the first session.context turn.
+    void discoverModelLimits(ctx).then((fresh)=>{
+      if(disposed)return;
+      for(const [k,v] of fresh)if(!modelLimits.has(k))modelLimits.set(k,v);
+    }).catch(()=>{});
+  }
   const modelLookups=new Set<string>();
   const cache=new ContextCache();
   const dedupeRing=new ToolDedupeRing(opts.dedupeWindow,opts.minOutputChars);
@@ -768,10 +777,9 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
       });
     }catch{memoryStop=null;activeVault=null;observe((s: any)=>{s.setMemoryProvider(null);s.setMemoryState({active:false,error:'setup-failed'});});}
   }
-  let disposed=false;
   return async()=>{
     if(disposed)return;
-    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();nativeBySession.clear();appliedChars.clear();nativeSeeded.clear();activeVault=null;
+    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();nativeBySession.clear();appliedChars.clear();nativeSeeded.clear();modelLimits.clear();activeVault=null;
     if(memoryStop)await Promise.resolve().then(memoryStop).catch(()=>{});
     await Promise.allSettled(registrations.reverse().map(reg=>reg.dispose()));
     await dispose();

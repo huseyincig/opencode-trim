@@ -45,6 +45,7 @@ export function normalizeSnapshot(raw: any): any {
     revision: n(raw.revision),
     engine: {
       enabled: b(e.enabled), shell: b(e.shell), toolFiltering: b(e.toolFiltering), pruning: b(e.pruning), compactionInputPruning: b(e.compactionInputPruning),
+      autoCompact: b(e.autoCompact),
       thresholds: { start: n(th.start), force: n(th.force), critical: n(th.critical) },
     },
     context: { known: b(c.known) === true, estimatedTokens: n(c.estimatedTokens), estimatedChars: n(c.estimatedChars), usableTokens: n(c.usableTokens), limitTokens: n(c.limitTokens), ratio: n(c.ratio), source: safeText(c.source), media: b(c.media), at: n(c.at), breakdown: bd },
@@ -157,7 +158,7 @@ function totalSaved(snap: any): number | null {
   return any ? sum : null
 }
 
-export const TRIM_VERSION = "0.9.3"
+export const TRIM_VERSION = "0.9.4"
 
 export const SECTION_TITLES: Record<string, string> = { context: "Context", optimization: "Optimization", compaction: "Compaction", memory: "Memory" }
 
@@ -339,15 +340,24 @@ export interface BarSegments {
   sys: number
   chat: number
   tools: number
-  toolsWarn: number
   empty: number
 }
-export interface SidebarDetailRow {
+export interface CompositionShares {
+  known: boolean
+  sysPct: number | null
+  chatPct: number | null
+  toolsPct: number | null
+  sysText: string
+  chatText: string
+  toolsText: string
+}
+export interface SidebarDetailLine {
   key: string
-  label: string
   parts: string[]
-  value: string
+  text: string
   tone: string
+  cachePolicy?: string | null
+  cacheTone?: string
 }
 
 export function normalizeViewMode(stored: any): TrimViewMode {
@@ -435,79 +445,79 @@ export function compactionBreakdown(messages: unknown): { total: number; auto: n
   return { total, auto, manual, failed, lastAt: newest ? newest.at : null, lastReason: newest ? newest.reason : null }
 }
 
-export function computeBarSegments(barRatio: number | null, breakdown: SidebarBreakdown | null, width: number = 24, health: HealthState = "healthy"): BarSegments {
-  const w = Number.isInteger(width) && width > 0 ? width : 24
-  if (barRatio === null || !Number.isFinite(barRatio) || barRatio <= 0) {
-    return { sys: 0, chat: 0, tools: 0, toolsWarn: 0, empty: w }
+// Largest-remainder apportionment so integer buckets always sum strictly to `totalSlots`.
+function apportionThree(a: number, b: number, c: number, totalSlots: number, minNonZero: boolean = false): [number, number, number] {
+  const sum = a + b + c
+  if (sum <= 0 || totalSlots <= 0) return [0, 0, 0]
+  const raw = [(a / sum) * totalSlots, (b / sum) * totalSlots, (c / sum) * totalSlots]
+  const out: [number, number, number] = [Math.floor(raw[0]), Math.floor(raw[1]), Math.floor(raw[2])]
+  if (minNonZero && totalSlots >= 3) {
+    if (a > 0 && out[0] === 0) out[0] = 1
+    if (b > 0 && out[1] === 0) out[1] = 1
+    if (c > 0 && out[2] === 0) out[2] = 1
   }
-  const clamped = Math.min(1, Math.max(0, barRatio))
-  const filled = Math.min(w, Math.max(1, Math.round(clamped * w)))
-  const empty = w - filled
+  let cur = out[0] + out[1] + out[2]
+  while (cur > totalSlots) {
+    let maxIdx = 0
+    if (out[1] > out[maxIdx]) maxIdx = 1
+    if (out[2] > out[maxIdx]) maxIdx = 2
+    out[maxIdx]--
+    cur--
+  }
+  const rem: Array<[0 | 1 | 2, number]> = [
+    [0, raw[0] - out[0]],
+    [1, raw[1] - out[1]],
+    [2, raw[2] - out[2]],
+  ]
+  rem.sort((x, y) => y[1] - x[1])
+  let idx = 0
+  while (cur < totalSlots) {
+    out[rem[idx % 3][0]]++
+    cur++
+    idx++
+  }
+  return out
+}
+
+// 100%-filled 3-color composition bar (sys / chat / tools). Empty only when breakdown is unavailable.
+export function computeBarSegments(breakdown: SidebarBreakdown | null, width: number = 32): BarSegments {
+  const w = Number.isInteger(width) && width > 0 ? width : 32
   const sysC = breakdown ? Math.max(0, breakdown.systemChars) : 0
   const chatC = breakdown ? Math.max(0, breakdown.chatChars) : 0
   const toolC = breakdown ? Math.max(0, breakdown.toolChars) : 0
-  const sum = sysC + chatC + toolC
-  let sys = 0, chat = 0, tools = 0
-  if (sum <= 0) {
-    tools = filled
-  } else {
-    const rawSys = (sysC / sum) * filled
-    const rawChat = (chatC / sum) * filled
-    const rawTools = (toolC / sum) * filled
-    sys = Math.floor(rawSys)
-    chat = Math.floor(rawChat)
-    tools = Math.floor(rawTools)
-    // Guarantee non-trivial categories (>= 3% share) at least 1 cell when space permits.
-    if (filled >= 3) {
-      if (sysC > 0 && sysC / sum >= 0.03 && sys === 0) sys = 1
-      if (chatC > 0 && chatC / sum >= 0.03 && chat === 0) chat = 1
-      if (toolC > 0 && toolC / sum >= 0.03 && tools === 0) tools = 1
-    }
-    let cur = sys + chat + tools
-    // Trim overflow from the largest segment if min-1 guarantees exceeded filled.
-    while (cur > filled) {
-      if (tools >= chat && tools >= sys && tools > 0) tools--
-      else if (chat >= sys && chat > 0) chat--
-      else if (sys > 0) sys--
-      cur--
-    }
-    // Distribute remaining rounding cells by largest fractional remainder.
-    const rem: Array<["sys" | "chat" | "tools", number]> = [
-      ["sys", rawSys - sys],
-      ["chat", rawChat - chat],
-      ["tools", rawTools - tools],
-    ]
-    rem.sort((a, b) => b[1] - a[1])
-    let idx = 0
-    while (cur < filled) {
-      const k = rem[idx % 3][0]
-      if (k === "sys") sys++
-      else if (k === "chat") chat++
-      else tools++
-      cur++
-      idx++
-    }
-  }
-  let toolsWarn = 0
-  if (health === "caution" && tools >= 2) {
-    const lower = Math.floor(tools / 2)
-    toolsWarn = tools - lower
-    tools = lower
-  }
-  return { sys, chat, tools, toolsWarn, empty }
+  if (sysC + chatC + toolC <= 0) return { sys: 0, chat: 0, tools: 0, empty: w }
+  const [sys, chat, tools] = apportionThree(sysC, chatC, toolC, w, true)
+  return { sys, chat, tools, empty: 0 }
 }
 
-function formatCompactionDetail(info: { running: boolean; count: number; auto: number; manual: number; failed: number; source: string }): { value: string; tone: string } {
-  if (info.running) return { value: "running", tone: "warning" }
-  if (info.count <= 0 && info.failed <= 0) return { value: "0", tone: "muted" }
-  const parts: string[] = []
-  if (info.auto > 0 && info.manual > 0) parts.push(`${fmtCount(info.auto)} auto, ${fmtCount(info.manual)} manual`)
-  else if (info.auto > 0 && info.auto === info.count) parts.push("auto")
-  else if (info.manual > 0 && info.manual === info.count) parts.push("manual")
-  else if (info.source === "history" || info.source === "db") parts.push("archived")
-  if (info.failed > 0) parts.push(`${fmtCount(info.failed)} failed`)
-  const main = parts.length ? `${fmtCount(info.count)} (${parts.join(", ")})` : fmtCount(info.count)
-  return { value: main, tone: info.failed > 0 && info.count === 0 ? "error" : "base" }
+// Estimated composition percentages (sys% + chat% + tools% === 100% when known).
+export function computeCompositionShares(breakdown: SidebarBreakdown | null): CompositionShares {
+  const sysC = breakdown ? Math.max(0, breakdown.systemChars) : 0
+  const chatC = breakdown ? Math.max(0, breakdown.chatChars) : 0
+  const toolC = breakdown ? Math.max(0, breakdown.toolChars) : 0
+  if (sysC + chatC + toolC <= 0) {
+    return { known: false, sysPct: null, chatPct: null, toolsPct: null, sysText: "--", chatText: "--", toolsText: "--" }
+  }
+  const [sysPct, chatPct, toolsPct] = apportionThree(sysC, chatC, toolC, 100, false)
+  return {
+    known: true,
+    sysPct,
+    chatPct,
+    toolsPct,
+    sysText: `${sysPct}%`,
+    chatText: `${chatPct}%`,
+    toolsText: `${toolsPct}%`,
+  }
+}
+
+function formatSessionCompactSummary(info: { running: boolean; count: number; auto: number; manual: number; failed: number; source: string }): string {
+  if (info.running) return "compacting..."
+  if (info.count <= 0 && info.failed <= 0) return "0 compact"
+  if (info.auto > 0 && info.manual > 0) return `${fmtCount(info.auto)} auto, ${fmtCount(info.manual)} manual`
+  if (info.auto > 0 && info.auto === info.count) return `${fmtCount(info.count)} auto compact`
+  if (info.manual > 0 && info.manual === info.count) return `${fmtCount(info.count)} manual compact`
+  if (info.source === "history" || info.source === "db") return `${fmtCount(info.count)} archived compact`
+  return `${fmtCount(info.count)} compact`
 }
 
 export function buildSidebarModel(raw: any, now: number = Date.now(), options: any = {}) {
@@ -516,26 +526,30 @@ export function buildSidebarModel(raw: any, now: number = Date.now(), options: a
   const nativeLimit = nativeLimitOf(options)
   const refNow = n(now) ?? snap?.now ?? Date.now()
 
-  const cm = snap ? contextMetrics(snap, native, nativeLimit) : null
   const c = snap?.context ?? null
   const known = !!(c?.known || native !== null)
   const used = native !== null ? native : (c?.estimatedTokens ?? null)
-  const limit = native !== null ? (nativeLimit ?? c?.limitTokens ?? null) : (c?.limitTokens ?? null)
-  const barRatio = cm && limit ? Math.max(0, (used ?? 0) / limit) : null
+  const modelLimit = native !== null ? (nativeLimit ?? c?.limitTokens ?? null) : (c?.limitTokens ?? null)
+  const usable = c?.usableTokens ?? null
+  // Dynamic budget: follow active cap (usableTokens) whenever a cap is smaller than the model window;
+  // otherwise use the full model window. Guarantees percent and health state always agree across any user config.
+  const isCapped = usable !== null && usable > 0 && modelLimit !== null && modelLimit > 0 && usable < modelLimit
+  const activeLimit = isCapped ? usable : modelLimit
+  const ratio = known && used !== null && activeLimit !== null && activeLimit > 0
+    ? Math.max(0, used) / activeLimit
+    : (c?.ratio ?? null)
+  const percent = ratio !== null ? Math.min(100, Math.round(ratio * 100)) : null
+  const over = known && used !== null && activeLimit !== null && used > activeLimit ? used - activeLimit : 0
+
   const startThreshold = snap?.engine?.thresholds?.start ?? 0.65
   const forceThreshold = snap?.engine?.thresholds?.force ?? 0.85
-  const engineRatio = c?.ratio ?? null
-  const effectiveRatio = barRatio !== null
-    ? (engineRatio !== null ? Math.max(barRatio, engineRatio) : barRatio)
-    : engineRatio
-
   let healthState: HealthState = "idle"
   let healthTone = "muted"
-  if (effectiveRatio !== null) {
-    if (cm?.over || effectiveRatio >= forceThreshold) {
+  if (ratio !== null) {
+    if (over > 0 || ratio >= forceThreshold) {
       healthState = "critical"
       healthTone = "error"
-    } else if (effectiveRatio >= startThreshold) {
+    } else if (ratio >= startThreshold) {
       healthState = "caution"
       healthTone = "warning"
     } else {
@@ -545,14 +559,16 @@ export function buildSidebarModel(raw: any, now: number = Date.now(), options: a
   }
 
   const usedText = native !== null ? fmtCount(native) : (c?.estimatedTokens !== null && c?.estimatedTokens !== undefined ? "~" + fmtCount(c.estimatedTokens) : "--")
-  const limitText = limit !== null && limit > 0 ? fmtCount(limit) : "--"
+  const limitText = activeLimit !== null && activeLimit > 0 ? fmtCount(activeLimit) : "--"
   const pairText = known && usedText !== "--" ? `${usedText}/${limitText}` : "--"
-  const percent = cm ? cm.percent : null
   const percentText = percent !== null ? `${percent}%` : "--"
-  const usable = c?.usableTokens ?? null
-  const hasCap = usable !== null && usable > 0 && limit !== null && limit > 0 && usable < limit
-  const capPct = hasCap && used !== null ? Math.min(100, Math.round((Math.max(0, used) / usable) * 100)) : null
-  const capText = hasCap ? `${fmtCount(usable)}${capPct !== null ? ` (${capPct}%)` : ""}` : null
+  const modelLimitText = modelLimit !== null && modelLimit > 0 ? fmtCount(modelLimit) : null
+  const contextParts: string[] = known && usedText !== "--"
+    ? [`context ${pairText}`, ...(percent !== null ? [percentText] : [])]
+    : ["context --"]
+  const contextDetailParts: string[] = known && usedText !== "--"
+    ? [`context ${pairText}`, ...(percent !== null ? [isCapped && modelLimitText ? `${percentText} (${modelLimitText})` : percentText] : [])]
+    : ["context --"]
 
   const rawBreakdown: SidebarBreakdown | null = c?.breakdown ?? (isObj(options?.messageBreakdown)
     ? {
@@ -561,6 +577,7 @@ export function buildSidebarModel(raw: any, now: number = Date.now(), options: a
         toolChars: Math.max(0, n(options.messageBreakdown.toolChars) ?? 0),
       }
     : null)
+  const composition = computeCompositionShares(rawBreakdown)
 
   // Session age: prefer host SessionInfo.time.created, then DB earliest session timestamp, then live RPC since.
   const createdAt = n(options?.sessionCreatedAt) ?? snap?.memory?.sessionFirstAt ?? snap?.since ?? null
@@ -608,66 +625,78 @@ export function buildSidebarModel(raw: any, now: number = Date.now(), options: a
     }
   }
 
-  // Session-scoped savings: live session drops/savedChars, or persisted DB session vault refs after restart.
+  // Session-scoped savings: live session savedChars/drops, or persisted DB session vault chars after restart.
   const liveSaved = snap ? totalSaved(snap) : null
   const liveDrops = snap?.pruning?.known ? (snap.pruning.drops ?? 0) : 0
   const dbSessVaultRefs = mem?.sessionVaultRefs ?? 0
   const dbSessVaultChars = mem?.sessionVaultChars ?? 0
-  let savedParts: string[] = []
-  let savedTone = "muted"
-  if (liveDrops > 0 || (liveSaved !== null && liveSaved > 0)) {
-    if (liveDrops > 0) savedParts.push(`${fmtCount(liveDrops)} drops`)
-    if (liveSaved !== null && liveSaved > 0) savedParts.push(`-${fmtChars(liveSaved)}`)
-    savedTone = "base"
-  } else if (dbSessVaultRefs > 0 || dbSessVaultChars > 0) {
-    if (dbSessVaultRefs > 0) savedParts.push(`${fmtCount(dbSessVaultRefs)} vault`)
-    if (dbSessVaultChars > 0) savedParts.push(`-${fmtChars(dbSessVaultChars)}`)
-    savedTone = "base"
+  let savedText = "saved 0"
+  if (liveSaved !== null && liveSaved > 0) {
+    savedText = `saved -${fmtChars(liveSaved)} chars`
+  } else if (liveDrops > 0) {
+    savedText = `saved ${fmtCount(liveDrops)} drops`
+  } else if (dbSessVaultChars > 0) {
+    savedText = `saved -${fmtChars(dbSessVaultChars)} chars`
+  } else if (dbSessVaultRefs > 0) {
+    savedText = `saved ${fmtCount(dbSessVaultRefs)} vault`
   }
 
-  // Bottom-right status summary for Open/Default mode.
-  let statusRightParts: string[] = []
-  let statusRightTone = "muted"
+  // Normal/default bottom line (below context + health).
+  let activityParts: string[] = []
+  let activityTone = "muted"
   if (comp.running) {
-    statusRightParts = ["compacting..."]
-    statusRightTone = "warning"
+    activityParts = ["compacting..."]
+    activityTone = "warning"
   } else if (healthState === "critical") {
-    statusRightParts = ["compact recommended"]
-    statusRightTone = "muted"
+    activityParts = ["compact recommended"]
+    activityTone = "muted"
   } else if (comp.count > 0) {
-    statusRightParts.push(`${fmtCount(comp.count)} compact`)
-    if (comp.lastAt !== null) statusRightParts.push(`${fmtAge(Math.max(0, refNow - comp.lastAt))} ago`)
-  } else if (savedParts.length) {
-    statusRightParts = savedParts
+    activityParts.push(`${fmtCount(comp.count)} compact`)
+    if (comp.lastAt !== null) activityParts.push(`${fmtAge(Math.max(0, refNow - comp.lastAt))} ago`)
+  } else if (savedText !== "saved 0") {
+    activityParts = [savedText]
   } else {
-    statusRightParts = ["idle"]
+    activityParts = ["idle"]
   }
 
-  // Detail rows for Expanded mode.
-  const details: SidebarDetailRow[] = []
-  const pushDetail = (key: string, label: string, parts: string[], tone: string = "base") => {
-    details.push({ key, label, parts, value: parts.join(" | "), tone })
-  }
-  if (sessionAge) pushDetail("session", "session", [sessionAge], "base")
-  if (capText) pushDetail("cap", "cap", [capText], capPct !== null && capPct >= 85 ? "warning" : "base")
-  const compDetail = formatCompactionDetail(comp)
-  pushDetail("compactions", "compactions", [compDetail.value], compDetail.tone)
-  pushDetail("saved", "saved", savedParts.length ? savedParts : ["idle"], savedTone)
+  // Detail lines for Expanded mode (dynamic per user config).
+  const detailLines: SidebarDetailLine[] = []
+  const sessionParts: string[] = []
+  if (sessionAge) sessionParts.push(`session ${sessionAge}`)
+  const compSummary = formatSessionCompactSummary(comp)
+  if (sessionParts.length) sessionParts.push(compSummary)
+  else sessionParts.push(`session --`, compSummary)
+  if (comp.failed > 0) sessionParts.push(`${fmtCount(comp.failed)} failed`)
+  detailLines.push({ key: "session", parts: sessionParts, text: sessionParts.join(" | "), tone: comp.running ? "warning" : "muted" })
+
+  // Savings + Cache line (cache only shown when pruning is enabled or a policy is reported).
+  const pruningOn = snap?.engine?.pruning !== false
   const policy = deriveCachePolicy(snap)
-  if (policy) {
-    const pTone = policy === "stable" ? "success" : (policy === "open" || policy === "bust") ? "warning" : "muted"
-    pushDetail("cache", "cache", [policy], pTone)
-  } else if (snap?.pruning?.known) {
-    pushDetail("cache", "cache", ["idle"], "muted")
-  }
+  const showCache = pruningOn && (policy !== null || snap?.pruning?.known === true)
+  const effectivePolicy = showCache ? (policy ?? "idle") : null
+  const cacheTone = effectivePolicy === "stable" ? "success" : (effectivePolicy === "open" || effectivePolicy === "bust") ? "warning" : "muted"
+  const savedLineParts = effectivePolicy ? [savedText, `cache ${effectivePolicy}`] : [savedText]
+  detailLines.push({
+    key: "saved",
+    parts: [savedText],
+    text: savedLineParts.join(" | "),
+    tone: "muted",
+    cachePolicy: effectivePolicy,
+    cacheTone,
+  })
+
+  // Memory line: dynamic -- shown ONLY when memory.enabled is true or memory reports an error.
   if (mem) {
     if (mem.error) {
-      pushDetail("memory", "memory", ["error " + mem.error], "error")
+      const p = [`memory error ${mem.error}`]
+      detailLines.push({ key: "memory", parts: p, text: p[0], tone: "error" })
     } else if (mem.enabled === true && mem.active === true) {
-      const mParts: string[] = [`${fmtCount(mem.summaries ?? 0)} sum`]
+      const mParts: string[] = [`memory ${fmtCount(mem.summaries ?? 0)} summaries`]
       if (mem.vaultRefs !== null && mem.vaultRefs > 0) mParts.push(`${fmtCount(mem.vaultRefs)} vault`)
       else if (mem.dbBytes !== null) mParts.push(fmtCount(mem.dbBytes).replace(/k$/, "K"))
-      pushDetail("memory", "memory", mParts, "base")
+      detailLines.push({ key: "memory", parts: mParts, text: mParts.join(" | "), tone: "muted" })
+    } else if (mem.enabled === true) {
+      detailLines.push({ key: "memory", parts: ["memory idle"], text: "memory idle", tone: "muted" })
     }
   }
 
@@ -680,26 +709,26 @@ export function buildSidebarModel(raw: any, now: number = Date.now(), options: a
       usedText,
       limitText,
       pairText,
-      barRatio,
-      effectiveRatio,
-      over: cm?.over ?? 0,
-      overText: cm && cm.over ? (native !== null ? "" : "~") + fmtCount(cm.over) : null,
-      capTokens: hasCap ? usable : null,
-      capRatio: capPct !== null ? capPct / 100 : null,
-      capText,
+      ratio,
+      over,
+      isCapped,
+      modelLimitText,
+      parts: contextParts,
+      detailParts: contextDetailParts,
     },
+    composition,
     health: {
       state: healthState,
       label: healthState,
       tone: healthTone,
     },
     sessionAge,
-    statusRight: {
-      parts: statusRightParts,
-      text: statusRightParts.join(" | "),
-      tone: statusRightTone,
+    activity: {
+      parts: activityParts,
+      text: activityParts.join(" | "),
+      tone: activityTone,
     },
-    details,
-    segments: (width: number) => computeBarSegments(barRatio, rawBreakdown, width, healthState),
+    detailLines,
+    segments: (width: number) => computeBarSegments(rawBreakdown, width),
   }
 }

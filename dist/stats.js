@@ -179,6 +179,7 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
             engine: {
                 enabled: o.enabled !== false, shell: !!o.shell, toolFiltering: !!o.toolFiltering, pruning: !!o.pruning,
                 compactionInputPruning: !!o.compactionInputPruning,
+                autoCompact: o.autoCompact !== false,
                 thresholds: { start: numOf(o.pressureStartRatio), force: numOf(o.pressureForceRatio), critical: numOf(o.pressureCriticalRatio) },
             },
             context: c
