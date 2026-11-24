@@ -115,13 +115,21 @@ function extractMsgReportedTokens(msg) {
     }
     return undefined;
 }
-/** Only estimates model-visible text; media tokens are not predictable from these hooks. */
-export function estimateRequest(event, modelLimits, options) {
+export function sumPrunedMsgChars(messages) {
+    if (!Array.isArray(messages))
+        return 0;
+    let total = 0;
+    for (const m of messages)
+        total += getPrunedMsgChars(m);
+    return total;
+}
+export function estimateRequest(event, modelLimits, options, native) {
     const model = resolveModelLimit(event, modelLimits, options);
     let estimatedTokens = 0;
     let estimatedChars = 0; // visible text chars counted by the same walk as estimatedTokens
     let mediaPresent = false;
     let lastReportedBase;
+    let lastFromNative = false;
     let trailingAfterReported = 0;
     let prunedCharsSoFar = 0;
     for (const part of event?.system ?? []) {
@@ -155,10 +163,21 @@ export function estimateRequest(event, modelLimits, options) {
             }
         }
         estimatedTokens += msgTokens;
-        const reported = extractMsgReportedTokens(msg);
+        let reported = extractMsgReportedTokens(msg);
+        let fromNative = false;
+        if (reported === undefined && native && typeof msg?.id === 'string') {
+            const v = native.tokens.get(msg.id);
+            if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+                reported = v;
+                fromNative = true;
+            }
+        }
         if (reported !== undefined) {
-            const reclaimedTokens = Math.floor(prunedCharsSoFar / 3);
+            // Real counts already include drops applied in the request they measured; only newer drops are subtracted.
+            const newlyPruned = fromNative ? Math.max(0, prunedCharsSoFar - (native?.baselineChars ?? 0)) : prunedCharsSoFar;
+            const reclaimedTokens = Math.floor(newlyPruned / 3);
             lastReportedBase = Math.max(0, reported - reclaimedTokens);
+            lastFromNative = fromNative;
             trailingAfterReported = 0;
         }
         else if (lastReportedBase !== undefined) {
@@ -171,7 +190,9 @@ export function estimateRequest(event, modelLimits, options) {
         estimatedTokens += estimateTokens(name) + estimateTokens(text);
     }
     const reportedTokens = lastReportedBase !== undefined ? lastReportedBase + trailingAfterReported : undefined;
-    const effectiveTokens = reportedTokens !== undefined ? Math.max(estimatedTokens, reportedTokens) : estimatedTokens;
+    // Real counts for the latest assistant step are authoritative (they match the OpenCode screen); the byte estimate
+    // is only a floor for provider counts embedded in messages and the fallback when no real count exists.
+    const effectiveTokens = reportedTokens !== undefined ? (lastFromNative ? reportedTokens : Math.max(estimatedTokens, reportedTokens)) : estimatedTokens;
     const context = model.context;
     const cappedModelOutput = context && model.output ? Math.min(model.output, Math.floor(context * 0.25)) : (model.output ?? 0);
     const rawReserve = Math.max(options.outputReserveTokens, cappedModelOutput);
@@ -180,7 +201,7 @@ export function estimateRequest(event, modelLimits, options) {
     const usable = context && context > reserve ? context - reserve : undefined;
     const ratio = usable ? effectiveTokens / usable : undefined;
     const out = { estimatedTokens, estimatedChars, modelContext: context, modelSource: model.source, usableTokens: usable,
-        ratio, estimated: true, mediaPresent };
+        ratio, estimated: true, mediaPresent, effectiveTokens };
     if (reportedTokens !== undefined)
         out.reportedTokens = reportedTokens;
     return out;

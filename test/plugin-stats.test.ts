@@ -5,7 +5,7 @@ import { TRIM_STATS_RPC } from '../src/stats-rpc.ts';
 import { PRUNED } from '../src/prune.ts';
 
 const BASE = { minOutputChars: 200, maxOutputLines: 25, maxOutputChars: 2500, minSavingsRatio: 0.05, protectRecentMessages: 4, pruneAfterToolChars: 10000 };
-const EVENT_TYPES = ['session.compaction.started', 'session.compaction.ended', 'session.compaction.failed'];
+const EVENT_TYPES = ['session.compaction.started', 'session.compaction.ended', 'session.compaction.failed', 'session.step.ended'];
 
 function harness(options = {}, { rpc = true, event = true, rpcRegister, events } = {}) {
   const log = { hooks: [], disposed: [], rpcRegistered: [], emitted: [], subscribed: [] };

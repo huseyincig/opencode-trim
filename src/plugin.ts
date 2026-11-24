@@ -9,7 +9,7 @@ import { setupMemory, memoryDbBytes } from './memory.ts';
 import { createTrimStats } from './stats.ts';
 import { TRIM_STATS_RPC } from './stats-rpc.ts';
 import { ContextCache } from './cache.ts';
-import { discoverModelLimits, ensureModelLimit, estimateRequest } from './pressure.ts';
+import { discoverModelLimits, ensureModelLimit, estimateRequest, sumPrunedMsgChars } from './pressure.ts';
 import { registerMeshPeer, wasMeshBounded, forgetMeshSession, MESH_METADATA_KEY } from './bridge.ts';
 
 export interface ActiveFileEntry {
@@ -473,6 +473,24 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   const workingState=new SessionWorkingState();
   const sessionPressure=new Map<string, number>();
   const autoCompactState=new Map<string, { inFlight: boolean; triggeredAt: number; turnsSince: number; lastMsgCount: number }>();
+  // Real provider token counts (same numbers the OpenCode screen shows): input + cache.read of the latest assistant step.
+  const nativeBySession=new Map<string, { id: string; tokens: number }>();
+  const appliedChars=new Map<string, number>();
+  const nativeSeeded=new Set<string>();
+  const nativeTokensOf=(t: any): number | undefined=>{
+    if(!obj(t))return undefined;
+    const input=typeof t.input==='number'&&Number.isFinite(t.input)?t.input:undefined;
+    if(input===undefined||input<=0)return undefined;
+    const read=obj(t.cache)&&typeof t.cache.read==='number'&&Number.isFinite(t.cache.read)?t.cache.read:0;
+    return input+Math.max(0,read);
+  };
+  const rememberNative=(sid: string, id: unknown, tokens: unknown)=>{
+    const total=nativeTokensOf(tokens);
+    if(typeof id!=='string'||!id||total===undefined)return;
+    nativeBySession.delete(sid);
+    if(nativeBySession.size>=128)nativeBySession.delete(nativeBySession.keys().next().value as string);
+    nativeBySession.set(sid,{id,tokens:total});
+  };
   let activeVault: any = null;
   const registrations: Array<{ dispose: () => any }> = [];
   const sessionOf=(event: any): string | undefined => {const s=event?.sessionID;return typeof s==='string'&&s?s:undefined;};
@@ -501,15 +519,31 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     }catch{return true;}
   };
   const contextStats=(event: any, pressure: any)=>observe((s: any)=>s.recordContext({
-    sessionID:sessionOf(event),estimatedTokens:pressure.reportedTokens!==undefined?Math.max(pressure.estimatedTokens,pressure.reportedTokens):pressure.estimatedTokens,estimatedChars:pressure.estimatedChars,
+    sessionID:sessionOf(event),estimatedTokens:typeof pressure.effectiveTokens==='number'?pressure.effectiveTokens:pressure.reportedTokens!==undefined?Math.max(pressure.estimatedTokens,pressure.reportedTokens):pressure.estimatedTokens,estimatedChars:pressure.estimatedChars,
     usableTokens:pressure.usableTokens,limitTokens:pressure.modelContext,ratio:pressure.ratio,
     source:pressure.modelSource,media:pressure.mediaPresent}));
   const runPruning=async(event: any, kind: string): Promise<void> => {
     if(!opts.pruning||foreignEvent(event))return;
     try{
       await ensureModelLimit(ctx,modelLimits,event?.model,modelLookups);
-      const pressure=estimateRequest(event,modelLimits,opts);
       const sid=sessionOf(event);
+      if(sid&&!nativeBySession.has(sid)&&!nativeSeeded.has(sid)&&typeof ctx?.session?.context==='function'){
+        // No step.ended seen yet (e.g. plugin started inside a long session): read real tokens once.
+        nativeSeeded.add(sid);
+        if(nativeSeeded.size>256)nativeSeeded.delete(nativeSeeded.values().next().value as string);
+        try{
+          const list=await ctx.session.context({sessionID:sid});
+          if(Array.isArray(list)){
+            for(let i=list.length-1;i>=0;i--){
+              const m=list[i];
+              if(obj(m)&&m.type==='assistant'&&nativeTokensOf(m.tokens)!==undefined){rememberNative(sid,m.id,m.tokens);break;}
+            }
+          }
+        }catch{/* best effort */}
+      }
+      const nat=sid?nativeBySession.get(sid):undefined;
+      const nativeInfo=nat?{tokens:new Map([[nat.id,nat.tokens]]),baselineChars:appliedChars.get(sid as string)??0}:undefined;
+      const pressure=estimateRequest(event,modelLimits,opts,nativeInfo);
       if(sid&&typeof pressure.ratio==='number'){
         sessionPressure.delete(sid);
         if(sessionPressure.size>=128)sessionPressure.delete(sessionPressure.keys().next().value as string);
@@ -518,7 +552,12 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
       const gate=cache.begin(event,opts,pressure,kind);
       const result=pruneContext(event,opts,{pressure,...gate,...(activeVault?{vault:activeVault}:{})});
       gate.finish(result.plannedIds);
-      const postPressure=(kind==='context'&&result.pruned>0)?estimateRequest(event,modelLimits,opts):pressure;
+      const postPressure=(kind==='context'&&result.pruned>0)?estimateRequest(event,modelLimits,opts,nativeInfo):pressure;
+      if(sid&&kind==='context'){
+        appliedChars.delete(sid);
+        if(appliedChars.size>=128)appliedChars.delete(appliedChars.keys().next().value as string);
+        appliedChars.set(sid,sumPrunedMsgChars(event?.messages));
+      }
       if(sid&&typeof postPressure.ratio==='number'){
         sessionPressure.delete(sid);
         if(sessionPressure.size>=128)sessionPressure.delete(sessionPressure.keys().next().value as string);
@@ -586,6 +625,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     workingState.reset(sid);
     sessionPressure.delete(sid);
     autoCompactState.delete(sid);
+    nativeBySession.delete(sid);appliedChars.delete(sid);nativeSeeded.delete(sid);
   };
   registrations.push({
     dispose:registerMeshPeer({
@@ -639,11 +679,14 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
         if(!rpcReg||typeof rpcReg.dispose!=='function')rpcReg=null;
       }
     }catch{rpcReg=null;}
+  }
+  if(stats||opts.pruning){
+    // One event pump: compaction lifecycle (stats + autoCompact guard) and step.ended (real provider token counts).
     try{
       if(typeof ctx?.event?.subscribe==='function'){
         subscriptionAbort=new AbortController();
         const signal=subscriptionAbort.signal;
-        const subscription=await ctx.event.subscribe({signal,types:[...COMPACTION_EVENTS]});
+        const subscription=await ctx.event.subscribe({signal,types:[...COMPACTION_EVENTS,'session.step.ended']});
         (async()=>{
           try{
             for await(const e of subscription){
@@ -651,6 +694,10 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
               if(foreignEvent(e))continue;
               const p=obj(e?.data)?e.data:obj(e?.properties)?e.properties:(obj(e)?e:{});
               const sid=p.sessionID??p.sessionId??e?.sessionID;
+              if(e?.type==='session.step.ended'){
+                if(typeof sid==='string'&&sid)rememberNative(sid,p.assistantMessageID,p.tokens);
+                continue;
+              }
               if(e?.type==='session.deleted'){
                 if(typeof sid==='string'&&sid){
                   forgetMeshSession(sid);
@@ -719,7 +766,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   let disposed=false;
   return async()=>{
     if(disposed)return;
-    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();activeVault=null;
+    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();nativeBySession.clear();appliedChars.clear();nativeSeeded.clear();activeVault=null;
     if(memoryStop)await Promise.resolve().then(memoryStop).catch(()=>{});
     await Promise.allSettled(registrations.reverse().map(reg=>reg.dispose()));
     await dispose();

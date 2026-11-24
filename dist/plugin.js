@@ -9,7 +9,7 @@ import { setupMemory, memoryDbBytes } from "./memory.js";
 import { createTrimStats } from "./stats.js";
 import { TRIM_STATS_RPC } from "./stats-rpc.js";
 import { ContextCache } from "./cache.js";
-import { discoverModelLimits, ensureModelLimit, estimateRequest } from "./pressure.js";
+import { discoverModelLimits, ensureModelLimit, estimateRequest, sumPrunedMsgChars } from "./pressure.js";
 import { registerMeshPeer, wasMeshBounded, forgetMeshSession, MESH_METADATA_KEY } from "./bridge.js";
 const SHELL_TOOLS = new Set(['shell', 'bash']);
 const LIST_TOOLS = new Set(['grep', 'glob', 'ls', 'list', 'find']);
@@ -542,6 +542,28 @@ export async function setupTrim(ctx) {
     const workingState = new SessionWorkingState();
     const sessionPressure = new Map();
     const autoCompactState = new Map();
+    // Real provider token counts (same numbers the OpenCode screen shows): input + cache.read of the latest assistant step.
+    const nativeBySession = new Map();
+    const appliedChars = new Map();
+    const nativeSeeded = new Set();
+    const nativeTokensOf = (t) => {
+        if (!obj(t))
+            return undefined;
+        const input = typeof t.input === 'number' && Number.isFinite(t.input) ? t.input : undefined;
+        if (input === undefined || input <= 0)
+            return undefined;
+        const read = obj(t.cache) && typeof t.cache.read === 'number' && Number.isFinite(t.cache.read) ? t.cache.read : 0;
+        return input + Math.max(0, read);
+    };
+    const rememberNative = (sid, id, tokens) => {
+        const total = nativeTokensOf(tokens);
+        if (typeof id !== 'string' || !id || total === undefined)
+            return;
+        nativeBySession.delete(sid);
+        if (nativeBySession.size >= 128)
+            nativeBySession.delete(nativeBySession.keys().next().value);
+        nativeBySession.set(sid, { id, tokens: total });
+    };
     let activeVault = null;
     const registrations = [];
     const sessionOf = (event) => { const s = event?.sessionID; return typeof s === 'string' && s ? s : undefined; };
@@ -591,7 +613,7 @@ export async function setupTrim(ctx) {
         }
     };
     const contextStats = (event, pressure) => observe((s) => s.recordContext({
-        sessionID: sessionOf(event), estimatedTokens: pressure.reportedTokens !== undefined ? Math.max(pressure.estimatedTokens, pressure.reportedTokens) : pressure.estimatedTokens, estimatedChars: pressure.estimatedChars,
+        sessionID: sessionOf(event), estimatedTokens: typeof pressure.effectiveTokens === 'number' ? pressure.effectiveTokens : pressure.reportedTokens !== undefined ? Math.max(pressure.estimatedTokens, pressure.reportedTokens) : pressure.estimatedTokens, estimatedChars: pressure.estimatedChars,
         usableTokens: pressure.usableTokens, limitTokens: pressure.modelContext, ratio: pressure.ratio,
         source: pressure.modelSource, media: pressure.mediaPresent
     }));
@@ -600,8 +622,29 @@ export async function setupTrim(ctx) {
             return;
         try {
             await ensureModelLimit(ctx, modelLimits, event?.model, modelLookups);
-            const pressure = estimateRequest(event, modelLimits, opts);
             const sid = sessionOf(event);
+            if (sid && !nativeBySession.has(sid) && !nativeSeeded.has(sid) && typeof ctx?.session?.context === 'function') {
+                // No step.ended seen yet (e.g. plugin started inside a long session): read real tokens once.
+                nativeSeeded.add(sid);
+                if (nativeSeeded.size > 256)
+                    nativeSeeded.delete(nativeSeeded.values().next().value);
+                try {
+                    const list = await ctx.session.context({ sessionID: sid });
+                    if (Array.isArray(list)) {
+                        for (let i = list.length - 1; i >= 0; i--) {
+                            const m = list[i];
+                            if (obj(m) && m.type === 'assistant' && nativeTokensOf(m.tokens) !== undefined) {
+                                rememberNative(sid, m.id, m.tokens);
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch { /* best effort */ }
+            }
+            const nat = sid ? nativeBySession.get(sid) : undefined;
+            const nativeInfo = nat ? { tokens: new Map([[nat.id, nat.tokens]]), baselineChars: appliedChars.get(sid) ?? 0 } : undefined;
+            const pressure = estimateRequest(event, modelLimits, opts, nativeInfo);
             if (sid && typeof pressure.ratio === 'number') {
                 sessionPressure.delete(sid);
                 if (sessionPressure.size >= 128)
@@ -611,7 +654,13 @@ export async function setupTrim(ctx) {
             const gate = cache.begin(event, opts, pressure, kind);
             const result = pruneContext(event, opts, { pressure, ...gate, ...(activeVault ? { vault: activeVault } : {}) });
             gate.finish(result.plannedIds);
-            const postPressure = (kind === 'context' && result.pruned > 0) ? estimateRequest(event, modelLimits, opts) : pressure;
+            const postPressure = (kind === 'context' && result.pruned > 0) ? estimateRequest(event, modelLimits, opts, nativeInfo) : pressure;
+            if (sid && kind === 'context') {
+                appliedChars.delete(sid);
+                if (appliedChars.size >= 128)
+                    appliedChars.delete(appliedChars.keys().next().value);
+                appliedChars.set(sid, sumPrunedMsgChars(event?.messages));
+            }
             if (sid && typeof postPressure.ratio === 'number') {
                 sessionPressure.delete(sid);
                 if (sessionPressure.size >= 128)
@@ -681,6 +730,9 @@ export async function setupTrim(ctx) {
         workingState.reset(sid);
         sessionPressure.delete(sid);
         autoCompactState.delete(sid);
+        nativeBySession.delete(sid);
+        appliedChars.delete(sid);
+        nativeSeeded.delete(sid);
     };
     registrations.push({
         dispose: registerMeshPeer({
@@ -754,11 +806,14 @@ export async function setupTrim(ctx) {
         catch {
             rpcReg = null;
         }
+    }
+    if (stats || opts.pruning) {
+        // One event pump: compaction lifecycle (stats + autoCompact guard) and step.ended (real provider token counts).
         try {
             if (typeof ctx?.event?.subscribe === 'function') {
                 subscriptionAbort = new AbortController();
                 const signal = subscriptionAbort.signal;
-                const subscription = await ctx.event.subscribe({ signal, types: [...COMPACTION_EVENTS] });
+                const subscription = await ctx.event.subscribe({ signal, types: [...COMPACTION_EVENTS, 'session.step.ended'] });
                 (async () => {
                     try {
                         for await (const e of subscription) {
@@ -768,6 +823,11 @@ export async function setupTrim(ctx) {
                                 continue;
                             const p = obj(e?.data) ? e.data : obj(e?.properties) ? e.properties : (obj(e) ? e : {});
                             const sid = p.sessionID ?? p.sessionId ?? e?.sessionID;
+                            if (e?.type === 'session.step.ended') {
+                                if (typeof sid === 'string' && sid)
+                                    rememberNative(sid, p.assistantMessageID, p.tokens);
+                                continue;
+                            }
                             if (e?.type === 'session.deleted') {
                                 if (typeof sid === 'string' && sid) {
                                     forgetMeshSession(sid);
@@ -860,6 +920,9 @@ export async function setupTrim(ctx) {
         workingState.clear();
         sessionPressure.clear();
         autoCompactState.clear();
+        nativeBySession.clear();
+        appliedChars.clear();
+        nativeSeeded.clear();
         activeVault = null;
         if (memoryStop)
             await Promise.resolve().then(memoryStop).catch(() => { });

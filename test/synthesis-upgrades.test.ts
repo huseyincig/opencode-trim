@@ -1866,3 +1866,84 @@ test('Step 17b: processToolEvent skips ToolDedupeRing when event.codemode === tr
   assert.match(e4.result.content, /byte-identical grep output/);
 });
 
+
+test('Step 18a: estimateRequest uses real provider tokens (by assistant message id) so the ratio matches the OpenCode screen', async () => {
+  const { estimateRequest: est } = await import('../src/pressure.ts');
+  const opts = parseOptions({ maxTokens: '350k' });
+  const catalog = new Map([['p/m', { context: 1_000_000, output: 16_000 }]]);
+  // ~420k estimated tokens under bytes/3 (1.26 MB of text), but the provider says 295,900.
+  const big = 'plain conversation text '.repeat(4000);
+  const messages: any[] = [];
+  for (let i = 0; i < 14; i++) {
+    messages.push({ id: `m${i}`, role: i % 2 === 0 ? 'user' : 'assistant', content: [{ type: 'text', text: big + i }] });
+  }
+  messages.push({ id: 'last-user', role: 'user', content: [{ type: 'text', text: 'ok' }] });
+  const event = { sessionID: 's', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
+  const withoutNative = est(event, catalog, opts);
+  assert.ok(withoutNative.ratio! > 1.0, `estimate alone overshoots, got ${withoutNative.ratio}`);
+  const withNative = est(event, catalog, opts, { tokens: new Map([['m13', 295_900]]) });
+  assert.equal(withNative.reportedTokens! >= 295_900 && withNative.reportedTokens! < 296_100, true, `reported ${withNative.reportedTokens}`);
+  assert.ok(withNative.ratio! < 1.0, `real tokens 295.9k must stay below the 350k cap, got ${withNative.ratio}`);
+});
+
+test('Step 18b: autoCompact decides on real step.ended tokens, not on the bytes/3 estimate', async () => {
+  const run = async (realInput: number, realCache: number) => {
+    const compactCalls: any[] = [];
+    let contextCb: any;
+    const queue: any[] = []; let wake: any; let done = false;
+    const ctx = {
+      options: { maxTokens: '350k', protectRecentMessages: 4, pruneAfterToolChars: 20000, tui: { enabled: false }, memory: { enabled: false } },
+      model: { list: async () => ({ data: [{ providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 16_000 } }] }) },
+      tool: { hook: async () => ({ dispose: async () => {} }) },
+      session: {
+        hook: async (name: string, fn: any) => { if (name === 'context') contextCb = fn; return { dispose: async () => {} }; },
+        compact: async (input: any) => { compactCalls.push(input); return { id: 'c' }; },
+      },
+      event: {
+        subscribe: async (args: any) => {
+          args.signal?.addEventListener('abort', () => { done = true; wake?.(); });
+          return (async function* () { while (!done) { if (queue.length) yield queue.shift(); else await new Promise((r) => { wake = r; }); } })();
+        },
+      },
+    };
+    const stop = await setupTrim(ctx);
+    const big = 'plain conversation text '.repeat(4000);
+    const messages: any[] = [];
+    for (let i = 0; i < 14; i++) messages.push({ id: `m${i}`, role: i % 2 === 0 ? 'user' : 'assistant', content: [{ type: 'text', text: big + i }] });
+    messages.push({ id: 'last-user', role: 'user', content: [{ type: 'text', text: 'ok' }] });
+    queue.push({ type: 'session.step.ended', data: { sessionID: 'sx', assistantMessageID: 'm13', tokens: { input: realInput, output: 500, reasoning: 0, cache: { read: realCache, write: 0 } } } });
+    wake?.();
+    await new Promise((r) => setTimeout(r, 30));
+    await contextCb({ sessionID: 'sx', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages });
+    await new Promise((r) => setTimeout(r, 10));
+    await stop();
+    return compactCalls;
+  };
+  assert.equal((await run(100_000, 195_900)).length, 0, '295.9k real tokens must NOT compact at a 350k cap');
+  assert.equal((await run(100_000, 260_000)).length, 1, '360k real tokens must compact');
+});
+
+test('Step 18c: with no step.ended seen yet, real tokens are seeded once from ctx.session.context', async () => {
+  const compactCalls: any[] = [];
+  let contextCb: any; let ctxReads = 0;
+  const ctx = {
+    options: { maxTokens: '350k', protectRecentMessages: 4, pruneAfterToolChars: 20000, tui: { enabled: false }, memory: { enabled: false } },
+    model: { list: async () => ({ data: [{ providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 16_000 } }] }) },
+    tool: { hook: async () => ({ dispose: async () => {} }) },
+    session: {
+      hook: async (name: string, fn: any) => { if (name === 'context') contextCb = fn; return { dispose: async () => {} }; },
+      compact: async (input: any) => { compactCalls.push(input); return { id: 'c' }; },
+      context: async () => { ctxReads++; return [{ id: 'm13', type: 'assistant', tokens: { input: 100_000, output: 500, reasoning: 0, cache: { read: 195_900, write: 0 } } }]; },
+    },
+  };
+  const stop = await setupTrim(ctx);
+  const big = 'plain conversation text '.repeat(4000);
+  const messages: any[] = [];
+  for (let i = 0; i < 14; i++) messages.push({ id: `m${i}`, role: i % 2 === 0 ? 'user' : 'assistant', content: [{ type: 'text', text: big + i }] });
+  messages.push({ id: 'last-user', role: 'user', content: [{ type: 'text', text: 'ok' }] });
+  for (let t = 0; t < 3; t++) await contextCb({ sessionID: 'sy', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages: structuredClone(messages) });
+  await new Promise((r) => setTimeout(r, 10));
+  await stop();
+  assert.equal(ctxReads, 1, 'seeded exactly once per session, not every turn');
+  assert.equal(compactCalls.length, 0);
+});

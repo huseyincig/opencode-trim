@@ -20,6 +20,8 @@ export interface PressureEstimate {
     estimated: boolean;
     mediaPresent: boolean;
     reportedTokens?: number;
+    /** Token count the ratio is based on: real provider tokens when available, else the byte estimate. */
+    effectiveTokens: number;
 }
 export declare function recordPrunedMsgChars(msg: unknown, deltaChars: number): void;
 export declare function getPrunedMsgChars(msg: unknown): number;
@@ -27,7 +29,13 @@ export declare function resolveModelLimit(event: any, modelLimits?: Map<string, 
 /** Bytes are treated conservatively for mostly UTF-8 text, without expensive tokenizer dependencies. */
 export declare function estimateTokens(text: unknown): number;
 /** Only estimates model-visible text; media tokens are not predictable from these hooks. */
-export declare function estimateRequest(event: any, modelLimits: Map<string, ModelLimitEntry>, options: any): PressureEstimate;
+/** Real provider token counts keyed by assistant message id (e.g. from session.step.ended), plus drops already reflected in them. */
+export interface NativeTokenInfo {
+    tokens: Map<string, number>;
+    baselineChars?: number;
+}
+export declare function sumPrunedMsgChars(messages: unknown): number;
+export declare function estimateRequest(event: any, modelLimits: Map<string, ModelLimitEntry>, options: any, native?: NativeTokenInfo): PressureEstimate;
 /** Prewarm host-provided limits once. Not a provider generation request. */
 export declare function discoverModelLimits(ctx: any): Promise<Map<string, ModelLimitEntry>>;
 export declare function ensureModelLimit(ctx: any, modelLimits: Map<string, ModelLimitEntry>, model: any, attempted: Set<string>): Promise<void>;
