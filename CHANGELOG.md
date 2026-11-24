@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.1 — 2026-11-24
+
+- **TUI Sidebar Header & Bar Separation Polish (`src/tui.tsx`)**:
+  - Added 1-row vertical breathing room (`marginTop={1}`) between the `[ trim ]` pill header and the centered 3-color composition bar.
+  - Switched the `[ trim ]` pill badge fill to a distinct neutral accent (`theme.text.base` with `theme.background.base` label) so it never blends visually into the purple `sys` segment underneath.
+- **Verification**: **`534 / 534`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors).
+
 ## 0.10.0 — 2026-11-24
 
 - **Lossless List/Search Path-Prefix & Directory Compaction (`src/compress.ts`, `src/plugin.ts`)**:

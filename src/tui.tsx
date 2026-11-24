@@ -151,6 +151,7 @@ export default Plugin.define({
     const base = () => theme?.text?.base ?? "white"
     const muted = () => theme?.text?.muted ?? base()
     const bgColor = () => theme?.background?.base ?? theme?.background?.panel ?? "#111318"
+    const badgeColor = () => theme?.text?.base ?? "#e2e8f0"
     const faint = () => theme?.text?.faint ?? "#3f434a"
     const sysColor = () => theme?.syntax?.keyword ?? theme?.brand?.primary?.base ?? theme?.text?.accent?.base ?? "#a875ff"
     const chatColor = () => theme?.syntax?.function ?? theme?.status?.info?.base ?? "#38bdf8"
@@ -408,7 +409,7 @@ export default Plugin.define({
                 >
                   <box flexDirection="row" alignItems="center" flexShrink={0}>
                     <text fg={muted()} wrapMode="none">{"▶ "}</text>
-                    <box backgroundColor={sysColor()} paddingLeft={1} paddingRight={1}>
+                    <box backgroundColor={badgeColor()} paddingLeft={1} paddingRight={1}>
                       <text fg={bgColor()} wrapMode="none">trim</text>
                     </box>
                   </box>
@@ -438,7 +439,7 @@ export default Plugin.define({
                 onMouseUp={toggle}
               >
                 <text fg={muted()} wrapMode="none">{"▼ "}</text>
-                <box backgroundColor={sysColor()} paddingLeft={1} paddingRight={1}>
+                <box backgroundColor={badgeColor()} paddingLeft={1} paddingRight={1}>
                   <text fg={bgColor()} wrapMode="none">trim</text>
                 </box>
                 <text fg={muted()} wrapMode="none">{" v" + TRIM_VERSION}</text>
@@ -450,7 +451,7 @@ export default Plugin.define({
                 </Show>
               </box>
               <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={1} gap={0}>
-                <box width="100%" flexDirection="row" justifyContent="center" alignItems="center" flexShrink={0}>
+                <box width="100%" flexDirection="row" justifyContent="center" alignItems="center" flexShrink={0} marginTop={1}>
                   <SegmentedBar
                     segments={expandedSegments()}
                     sysColor={sysColor()}

@@ -175,6 +175,7 @@ export default Plugin.define({
     const base = () => theme?.text?.base ?? "white";
     const muted = () => theme?.text?.muted ?? base();
     const bgColor = () => theme?.background?.base ?? theme?.background?.panel ?? "#111318";
+    const badgeColor = () => theme?.text?.base ?? "#e2e8f0";
     const faint = () => theme?.text?.faint ?? "#3f434a";
     const sysColor = () => theme?.syntax?.keyword ?? theme?.brand?.primary?.base ?? theme?.text?.accent?.base ?? "#a875ff";
     const chatColor = () => theme?.syntax?.function ?? theme?.status?.info?.base ?? "#38bdf8";
@@ -492,7 +493,7 @@ export default Plugin.define({
                 }), null);
                 _$effect(_p$ => {
                   var _v$12 = muted(),
-                    _v$13 = sysColor(),
+                    _v$13 = badgeColor(),
                     _v$14 = bgColor(),
                     _v$15 = tone(model().health.tone);
                   _v$12 !== _p$.e && (_p$.e = _$setProp(_el$39, "fg", _v$12, _p$.e));
@@ -553,7 +554,7 @@ export default Plugin.define({
                 }), null);
                 _$effect(_p$ => {
                   var _v$3 = muted(),
-                    _v$4 = sysColor(),
+                    _v$4 = badgeColor(),
                     _v$5 = bgColor(),
                     _v$6 = muted(),
                     _v$7 = tone(model().health.tone);
@@ -599,6 +600,7 @@ export default Plugin.define({
                 _$setProp(_el$19, "justifyContent", "center");
                 _$setProp(_el$19, "alignItems", "center");
                 _$setProp(_el$19, "flexShrink", 0);
+                _$setProp(_el$19, "marginTop", 1);
                 _$insert(_el$19, _$createComponent(SegmentedBar, {
                   get segments() {
                     return expandedSegments();

@@ -18,7 +18,7 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 
 ## 📊 Verification & Live Acceptance
 
-> OpenCode Trim **v0.10.0** was verified on **24 November 2026** against **OpenCode V2 (`v2.4.1`, `>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
+> OpenCode Trim **v0.10.1** was verified on **24 November 2026** against **OpenCode V2 (`v2.4.1`, `>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
 
 - **Current Automated Verification:** **534 / 534** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, list-path prefix compaction, SQLite FTS5 memory, vault-wide `trim_expand` search, opt-in cache-safe `trim_reduce`, real provider token accounting (`session.step.ended`), `session.deleted`/`fork` lifecycle, non-blocking startup prewarm, 2-stage auto-compaction fallback, OpenCode `v2.4.1` Code Mode, and dynamic 3-mode TUI + `/trim` slash command tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 28 test suites).
 - **Deterministic Compression & Pruning Benchmark (`npm run bench`):**
@@ -27,7 +27,7 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 - **Packed Tarball & Dual-Runtime Verification:** `npm pack` `.tgz` artifact verified in isolated Node **26.13.1** and Bun **1.4.4** sandboxes across `.`, `./tui`, `./rpc`, `./core`, `./prune`, and `./pressure` entrypoints.
 - **Live OpenCode V2 Host Acceptance:** Verified plugin load, `tool.execute.after` shell compression, `session.context` pruning, real-provider compression/pruning (`opencode-go/deepseek-v4.1-flash` and `opencode-go/beam-free`), SQLite FTS5 compaction archiving & `trim_history_search`, multi-location fail-closed isolation, and TUI sidebar rendering across 80–200 column widths.
 
-Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.10.0 release notes](CHANGELOG.md) for the latest changes.
+Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.10.1 release notes](CHANGELOG.md) for the latest changes.
 
 ---
 
@@ -49,7 +49,7 @@ Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for repr
 
 ## 📦 Installation
 
-The current version is **0.10.0** (OpenCode **V2 `>=2.3.0`**, verified on **`v2.4.1`**, Node.js **`^26.0.0`**).
+The current version is **0.10.1** (OpenCode **V2 `>=2.3.0`**, verified on **`v2.4.1`**, Node.js **`^26.0.0`**).
 
 OpenCode Trim supports **Global**, **Project-Local**, **`.opencode/plugins/` Local Wrapper / Symlink**, **Local Development (`file://`)**, and **Remote TUI Client (`cli.json`)** installation modes.
 
@@ -76,7 +76,7 @@ Or pin an exact version and configure optional features (such as the TUI sidebar
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     [
-      "opencode-trim@0.10.0",
+      "opencode-trim@0.10.1",
       {
         "maxTokens": "350k",
         "tui": {
@@ -295,14 +295,15 @@ Because OpenCode V2 auto-discovers `./tui` from `package.json`, the sidebar uses
 ### 🔽 Open / Normal View (Default)
 
 ```text
-▼ [ trim ] v0.10.0 · ● healthy
+▼ [ trim ] v0.10.1 · ● healthy
+
   ██████████████████████████████████
   sys 10%      chat 24%     tools 66%
   Context             106k/350k · 30%
   Compactions       1 compact · 12m ago
 ```
 
-- **Header:** Clickable 3-mode pill header (`▼ [ trim ]` / `▶ [ trim ]`) cycling **Normal → Detail → Minimal**, showing current version (`v0.10.0`), live health status (`● healthy` / `● caution` / `● critical`), and status marker (`!` when stale, `?` before first snapshot).
+- **Header:** Clickable 3-mode pill header (`▼ [ trim ]` / `▶ [ trim ]`) cycling **Normal → Detail → Minimal**, showing current version (`v0.10.1`), live health status (`● healthy` / `● caution` / `● critical`), and status marker (`!` when stale, `?` before first snapshot).
 - **Centered 100%-Filled 3-Color Composition Bar:** Always fills 100% of the bar width centered inside the sidebar with `sys` (purple), `chat` (cyan), and `tools` (green) estimated character shares, with bold aligned `sys X%` / `chat Y%` / `tools Z%` percentages directly underneath (`sys + chat + tools = 100%`).
 - **Dynamic Two-Column `StatRow` Metrics & `/trim` Command:** `Context` adapts automatically to the user's active configuration (`maxTokens` / `pruneAt` cap when active, or full model window otherwise, evaluated against configured `pressureStartRatio` / `pressureForceRatio`). Run **`/trim`** (or `/trim-gain`) in the prompt for a full savings breakdown, or `/trim minimal | normal | detail | toggle` to switch sidebar modes.
 
@@ -311,7 +312,8 @@ Because OpenCode V2 auto-discovers `./tui` from `package.json`, the sidebar uses
 Clicking the `trim` header cycles to the two-column detail breakdown and then to the 1-line minimal bar:
 
 ```text
-▼ [ trim ] v0.10.0 · ● healthy
+▼ [ trim ] v0.10.1 · ● healthy
+
   ██████████████████████████████████
   sys 10%      chat 24%     tools 66%
   Context       106k/350k · 30% (1M)
