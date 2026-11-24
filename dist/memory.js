@@ -281,7 +281,7 @@ export async function setupMemory(ctx, opts, hooks) {
         regs.push(validReg(await ctx.tool.transform((editor) => {
             editor.add({
                 name: EXPAND_TOOL_NAME,
-                description: 'Restore, slice, search, or list pruned tool outputs cached by opencode-trim in the project vault. Pass `id` (e.g. "trm_...") with optional line range (startLine, endLine) and grep/regex to inspect a cached output; omit `id` and pass `grep` to search across all cached vault outputs; or omit both to list recent cached refs.',
+                description: 'Recover, slice, or search EPHEMERAL pruned command/web outputs (such as shell, bash, or webfetch logs) cached by opencode-trim in the project vault. NEVER use trim_expand to read or search live source files on disk — always use your live file/code tools for source code, as vault entries are point-in-time historical snapshots that may be stale. Pass `id` (e.g. "trm_...") with optional startLine/endLine/grep to inspect a cached output; omit `id` and pass `grep` to search cached command/web outputs; or omit both to list recent cached refs.',
                 input: {
                     type: 'object',
                     properties: {

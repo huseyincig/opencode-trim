@@ -304,3 +304,35 @@ test('Debug hardening: monorepo stale-read path isolation, warm-cache rollback, 
   assert.ok(!block.includes('\x00'));
   store.close();
 });
+
+test('Live-disk file/code tools are never vaulted and direct model to re-read live files instead of trim_expand', () => {
+  const stored: any[] = [];
+  const vault = {
+    store(refId: string, entry: any) { stored.push({ refId, tool: entry.name }); return true; },
+    has(refId: string) { return stored.some((x) => x.refId === refId); },
+  };
+  const opts = parseOptions({ protectRecentMessages: 4, protectRecentTokens: 1024, keepRecentToolResults: 1, pruneAfterToolChars: 10000, pruneMinResultChars: 500, prunePreviewLines: 0 });
+  const big = 'line code\n'.repeat(200);
+  const messages: any[] = [
+    { id: 'm0', role: 'assistant', content: [{ type: 'tool', id: 'c0', tool: 'read', input: { filePath: 'src/app.ts' }, state: { status: 'completed', output: big } }] },
+    { id: 'm1', role: 'assistant', content: [{ type: 'tool', id: 'c1', tool: 'code_zoom', input: { filePath: 'src/app.ts' }, state: { status: 'completed', output: big } }] },
+    { id: 'm2', role: 'assistant', content: [{ type: 'tool', id: 'c2', tool: 'grep', input: { pattern: 'foo' }, state: { status: 'completed', output: big } }] },
+    { id: 'm3', role: 'assistant', content: [{ type: 'tool', id: 'c3', tool: 'shell', input: { command: 'echo build log' }, state: { status: 'completed', output: big } }] },
+    { id: 'm4', role: 'assistant', content: [{ type: 'tool', id: 'c4', tool: 'read', input: { filePath: 'src/recent.ts' }, state: { status: 'completed', output: big } }] },
+    ...Array.from({ length: 6 }, (_, i) => ({ id: `tail-${i}`, role: i % 2 ? 'assistant' : 'user', content: `t${i} ` + 'z'.repeat(1200) })),
+  ];
+  const res = pruneContext({ sessionID: 's-live', messages }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 }, vault });
+  assert.equal(res.pruned, 4);
+  // ONLY shell was vaulted; read, code_zoom, grep were NOT vaulted!
+  assert.deepEqual(stored.map((x) => x.tool), ['shell']);
+  assert.match(messages[0].content[0].state.output, /live file\/code output.*src\/app\.ts.*Do not use trim_expand/);
+  assert.doesNotMatch(messages[0].content[0].state.output, /trm_/);
+  assert.match(messages[1].content[0].state.output, /live file\/code output.*code_zoom/);
+  assert.doesNotMatch(messages[1].content[0].state.output, /trm_/);
+  assert.match(messages[2].content[0].state.output, /live file\/code output.*grep/);
+  assert.match(messages[3].content[0].state.output, /RECOVERABLE, not lost.*trm_/);
+
+  // Re-running pruneContext must NOT double-prune liveDiskNotice
+  const res2 = pruneContext({ sessionID: 's-live', messages }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 }, vault });
+  assert.equal(res2.pruned, 0);
+});

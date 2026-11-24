@@ -41,6 +41,7 @@ export declare const PRUNED = "[opencode-trim: old tool output omitted from mode
 export declare const PRUNED_ERROR_INPUT = "[opencode-trim: oversized input of failed tool call omitted; error output preserved]";
 export declare const PRUNED_REASONING = "[opencode-trim: historical reasoning trace omitted]";
 export declare function recoverableNotice(refId: string, tool?: string, tokens?: number, lines?: number): string;
+export declare function liveDiskNotice(tool?: string, target?: string, tokens?: number, lines?: number): string;
 export declare function expiredNotice(refId: string, tool?: string): string;
 export declare function buildPreviewNotice(original: string, notice: string, previewLines?: number): string;
 export declare function scorePruningCandidate(savedChars: number, suffixChars: number): number;
@@ -57,6 +58,8 @@ export { isArr as isPlainArray };
  * Never hashes mutable tool outputs, so the key stays invariant before and after pruning.
  */
 export declare function stableMessageKey(msg: any): string;
+/** True for tools that inspect live files/code on disk (should be re-read live, never vaulted as stale snapshots). */
+export declare function isLiveDiskTool(name: unknown): boolean;
 /** Shell commands whose output may carry instructions, secrets or patches: never pruned. */
 export declare function protectedShell(cmd: unknown): boolean;
 /** Default number of lines a read returns when no limit/endLine is given. */

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.2 — 2026-11-24
+
+- **Prevent Stale Source-Code Reads via `trim_expand` (`src/prune.ts`, `src/memory.ts`, `src/memory-store.ts`)**:
+  - Excluded live filesystem/code inspection tools (`read`, `grep`, `glob`, `ls`, `list`, `search`, `find`, and generic read-only `*_read|zoom|outline|search|grep|glob|...` suffixes via `isLiveDiskTool()`) from `vault` storage and `trim_expand` references.
+  - Replaced pruned live-disk outputs with `liveDiskNotice()`, directing the model to re-read or re-run live file/code tools on disk instead of reading potentially stale point-in-time vault snapshots.
+  - Kept `vault` + `trim_expand` focused strictly on ephemeral/expensive command and web outputs (`shell`, `bash`, `webfetch`) and updated `trim_expand`'s tool description and output header to warn against using historical snapshots for live source files.
+- **Verification**: **`543 / 543`** tests passing across 29 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
+
 ## 0.11.1 — 2026-11-24
 
 - **Performance-Tuned Out-of-the-Box Defaults (`src/config.ts`, `README.md`)**:

@@ -402,8 +402,8 @@ test('Step 4b: pruneContext with vault emits recoverableNotice and fails closed 
 
   const messages = [];
   for (let i = 0; i < 10; i++) {
-    messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: 'read', input: { path: `src/f${i}.js` } }] });
-    messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: 'read', result: { type: 'text', value: `file ${i}\n` + 'x'.repeat(1500) } }] });
+    messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: 'shell', input: { command: `echo run ${i}` } }] });
+    messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: 'shell', result: { type: 'text', value: `run ${i}\n` + 'x'.repeat(1500) } }] });
   }
   const event = { sessionID: 's-v', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
   const opts = parseOptions({ pruneAfterToolChars: 10000, protectRecentMessages: 4, protectRecentTokens: 1024, keepRecentToolResults: 1 });
@@ -568,11 +568,11 @@ test('Step 5: setupTrim E2E integrates dedupeWindow, read envelope shortening, p
   await hooks['execute.after'](sh2);
   assert.match(sh2.result.content, /byte-identical shell output from 1 call ago/);
 
-  // 3. Context pruning automatically populates vault and trim_expand retrieves it
+  // 3. Context pruning automatically populates vault for ephemeral shell outputs and trim_expand retrieves it
   const messages = [];
   for (let i = 0; i < 15; i++) {
-    messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: 'read', input: { path: `src/f${i}.js` } }] });
-    messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: 'read', result: { type: 'text', value: `file ${i} special_token_line\n` + 'z'.repeat(1500) } }] });
+    messages.push({ id: `a-${i}`, role: 'assistant', content: [{ type: 'tool-call', id: `c-${i}`, name: 'shell', input: { command: `echo build ${i}` } }] });
+    messages.push({ id: `r-${i}`, role: 'tool', content: [{ type: 'tool-result', id: `c-${i}`, name: 'shell', result: { type: 'text', value: `file ${i} special_token_line\n` + 'z'.repeat(1500) } }] });
   }
   const ctxEvent = { sessionID: 's1', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
   for (const fn of sessionContextHooks) await fn(ctxEvent);
