@@ -69,10 +69,10 @@ export declare const DEFAULTS: Readonly<{
     maxOutputLines: 160;
     maxOutputChars: 16000;
     maxInputScanChars: 2000000;
-    protectRecentMessages: 14;
+    protectRecentMessages: 10;
     protectRecentTokens: 4096;
-    keepRecentToolResults: 12;
-    pruneAfterToolChars: 100000;
+    keepRecentToolResults: 8;
+    pruneAfterToolChars: 75000;
     pruneMinResultChars: 800;
     pruneEligibleTools: string[];
     pressureStartRatio: 0.65;
@@ -80,13 +80,13 @@ export declare const DEFAULTS: Readonly<{
     pressureCriticalRatio: 0.94;
     outputReserveTokens: 8192;
     contextWindow: 0;
-    contextWindowCap: 350000;
+    contextWindowCap: 250000;
     supersessionMinChars: 5000;
     purgeErrorInputs: true;
     pruneHistoricalReasoning: true;
     pruneUnrelatedDiagnostics: true;
-    prunePreviewLines: 0;
-    dedupeWindow: 0;
+    prunePreviewLines: 2;
+    dedupeWindow: 8;
     cacheTtlMs: 300000;
     cacheMinSavingsChars: 6000;
     filterRules: never[];
@@ -94,7 +94,7 @@ export declare const DEFAULTS: Readonly<{
         enabled: false;
         agentAllowlist: readonly never[];
         agentDenylist: readonly never[];
-        retentionDays: 90;
+        retentionDays: 60;
     }>;
     tui: Readonly<{
         enabled: false;

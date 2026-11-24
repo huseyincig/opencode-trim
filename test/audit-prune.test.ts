@@ -519,7 +519,7 @@ test('source read with incidental Error tokens is prunable; real failure/log out
   const readArcs=()=>arcs(20,1100,{name:'read',inputOf:i=>({path:`/src/f${i}.js`})});
   const src=readArcs();setVal(src,0,'out 0\n'+SOURCE.repeat(3)+'x'.repeat(900));
   assert.ok(run(src).pruned>0);
-  assert.equal(val(src,0),PRUNED);
+  assert.ok(val(src,0).includes(PRUNED));
   const bodies={
     log:'2026-01-01T10:00:00Z ERROR db: connection refused\n'+'x'.repeat(1100),
     stack:'Error: boom\n    at load (/app/src/a.js:10:5)\n'+'x'.repeat(1100),
@@ -644,9 +644,9 @@ test('line-shaped diagnostics: bare Error/FATAL, timestamped lowercase level, JS
     assert.equal(val(e,0),body,k);
   }
   const src=readArcs();setVal(src,0,'out 0\n'+'function f(){ throw new Error("x"); }\n'.repeat(5)+'x'.repeat(1100));
-  run(src);assert.equal(val(src,0),PRUNED);
+  run(src);assert.ok(val(src,0).includes(PRUNED));
   const info=readArcs();setVal(info,0,'{"level":"info","msg":"ok"}'+pad);
-  run(info);assert.equal(val(info,0),PRUNED);
+  run(info);assert.ok(val(info,0).includes(PRUNED));
 });
 
 test('read and shell protection cover .npmrc, .netrc, id_rsa, secrets.json and SKILL.md',()=>{

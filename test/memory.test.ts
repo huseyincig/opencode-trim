@@ -51,7 +51,7 @@ function tmpDb() { const d = mkdtempSync(join(tmpdir(), 'trim-mem-')); return { 
 
 test('config: defaults, validation, unknown keys, frozen', () => {
   const o = parseOptions();
-  assert.deepEqual({ ...o.memory, agentAllowlist: [...o.memory.agentAllowlist], agentDenylist: [...o.memory.agentDenylist] }, { enabled: false, agentAllowlist: [], agentDenylist: [], retentionDays: 90 });
+  assert.deepEqual({ ...o.memory, agentAllowlist: [...o.memory.agentAllowlist], agentDenylist: [...o.memory.agentDenylist] }, { enabled: false, agentAllowlist: [], agentDenylist: [], retentionDays: 60 });
   assert.ok(Object.isFrozen(o.memory) && Object.isFrozen(o.memory.agentAllowlist) && Object.isFrozen(o.memory.agentDenylist));
   assert.throws(() => parseOptions({ memory: { agentDenylist: [1] } }));
   assert.throws(() => parseOptions({ memory: { bogus: 1 } }), /unknown memory/);

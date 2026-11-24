@@ -1185,10 +1185,16 @@ test('Step 13b: pruneContext prunes read-only chained/piped/2>&1 shell commands 
 // Step 14: Screen-Matched Simple Config ("350k"/"35%"), Combined V2 tool state.content & Inline Read-Only Scripts
 // ============================================================================
 
-test('Step 14a: out-of-the-box 350k default, maxTokens/pruneAt human shorthand ("350k", "35%"), and 1:1 screen budget math', () => {
-  // 1. Out of the box default caps 1M models at 350k
+test('Step 14a: out-of-the-box 250k default, maxTokens/pruneAt human shorthand ("350k", "35%"), and 1:1 screen budget math', () => {
+  // 1. Out of the box default caps 1M models at 250k (speed/TTFT-optimized profile)
   const def = parseOptions();
-  assert.equal(def.contextWindowCap, 350_000);
+  assert.equal(def.contextWindowCap, 250_000);
+  assert.equal(def.protectRecentMessages, 10);
+  assert.equal(def.keepRecentToolResults, 8);
+  assert.equal(def.pruneAfterToolChars, 75_000);
+  assert.equal(def.dedupeWindow, 8);
+  assert.equal(def.prunePreviewLines, 2);
+  assert.equal(def.memory.retentionDays, 60);
 
   // 2. Human shorthand on maxTokens / contextWindowCap / pruneAt
   assert.equal(parseOptions({ maxTokens: '350k' }).contextWindowCap, 350_000);
@@ -1483,8 +1489,8 @@ test('Step 15d: pruneContext prunes historical JSON, XML, and HTML tool outputs 
   const event = { sessionID: 's-json-html', model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages };
   const res = pruneContext(event, opts, { allowNewDrops: true, plannedDrops: new Set(), pressure: { ratio: 0.92, usableTokens: 15000 } });
   assert.equal(res.pruned, 2, 'historical JSON and HTML outputs should be pruned while PEM and recent output stay untouched');
-  assert.equal(messages[1].content[0].result.value, PRUNED);
-  assert.equal(messages[3].content[0].result.value, PRUNED);
+  assert.ok(messages[1].content[0].result.value.includes(PRUNED));
+  assert.ok(messages[3].content[0].result.value.includes(PRUNED));
   assert.equal(messages[5].content[0].result.value, pemPayload);
 });
 

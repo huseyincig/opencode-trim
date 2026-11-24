@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1 — 2026-11-24
+
+- **Performance-Tuned Out-of-the-Box Defaults (`src/config.ts`, `README.md`)**:
+  - Updated out-of-the-box engine defaults to the speed/TTFT & prompt-cache sweet spot: `contextWindowCap: 250000` (`"250k"`), `protectRecentMessages: 10`, `keepRecentToolResults: 8`, `pruneAfterToolChars: 75000`, `dedupeWindow: 8`, `prunePreviewLines: 2`, and `memory.retentionDays: 60` (keeping `cacheTtlMs: 300000`, `cacheMinSavingsChars: 6000`, `autoCompact: true`, and opt-in silent-by-default `tui.enabled`, `memory.enabled`, `memory.recentWork`, `compactionInputPruning`, and `reduceTool` intact).
+- **Verification**: **`542 / 542`** tests passing across 29 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
+
 ## 0.11.0 — 2026-11-24
 
 - **Cold-Cache Opportunity Window & Economic Break-Even Gate (`src/cache.ts`, `src/prune.ts`, `src/config.ts`, `src/plugin.ts`)**:

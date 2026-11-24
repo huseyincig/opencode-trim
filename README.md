@@ -18,7 +18,7 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 
 ## 📊 Verification & Live Acceptance
 
-> OpenCode Trim **v0.11.0** was verified on **24 November 2026** against **OpenCode V2 (`v2.4.1`, `>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
+> OpenCode Trim **v0.11.1** was verified on **24 November 2026** against **OpenCode V2 (`v2.4.1`, `>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
 
 - **Current Automated Verification:** **542 / 542** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, list-path prefix compaction, cold-cache break-even gating, write-invalidated stale-read pruning, FNV-1a `stableMessageKey` replay, post-compaction verification, top-3 tool bloat & overhead diagnostics, SQLite FTS5 memory (`recent`/`scope: "all"` + opt-in frozen `<recent_work>`), vault-wide `trim_expand` search, opt-in cache-safe `trim_reduce`, real provider token accounting (`session.step.ended`), `session.deleted`/`fork` lifecycle, non-blocking startup prewarm, 2-stage auto-compaction fallback, OpenCode `v2.4.1` Code Mode, and low-overhead dynamic 3-mode TUI + `/trim` slash command tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 94-file syntax check, 29 test suites).
 - **Deterministic Compression & Pruning Benchmark (`npm run bench`):**
@@ -27,7 +27,7 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 - **Packed Tarball & Dual-Runtime Verification:** `npm pack` `.tgz` artifact verified in isolated Node **26.13.1** and Bun **1.4.4** sandboxes across `.`, `./tui`, `./rpc`, `./core`, `./prune`, and `./pressure` entrypoints.
 - **Live OpenCode V2 Host Acceptance:** Verified plugin load, `tool.execute.after` shell compression, `session.context` pruning, real-provider compression/pruning (`opencode-go/deepseek-v4.1-flash` and `opencode-go/beam-free`), SQLite FTS5 compaction archiving & `trim_history_search`, multi-location fail-closed isolation, and TUI sidebar rendering across 80–200 column widths.
 
-Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.11.0 release notes](CHANGELOG.md) for the latest changes.
+Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.11.1 release notes](CHANGELOG.md) for the latest changes.
 
 ---
 
@@ -42,14 +42,14 @@ Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for repr
 - **Compact Guardian-Grade TUI Sidebar (`./tui`):** Opt-in (`tui.enabled: true`), borderless `sidebar.content` widget featuring `▶` / `▼` disclosure, two-column `StatRow` metrics, host-native context usage (`input + cache.read` over catalog limit), persisted compaction-history fallback after server restarts, and RPC-first probing with bounded hidden retries.
 - **Optional SQLite FTS5 Compaction Memory (`memory.enabled: true`):** Default-off Phase 1 & 1.1 archive using Node 26 built-in `node:sqlite` + FTS5. Observes native compaction summaries, scrubs secrets fail-closed (`[REDACTED]`), enforces composite `UNIQUE(project, event_id)` isolation, and exposes section-aware `trim_history_search` (`codemode: false`).
 - **Universal V2 Plugin Mesh Bridge (`src/bridge.ts`):** Zero-dependency N-way interoperability (`BRIDGE_REVISION: 2.3.1`) with sibling OpenCode V2 plugins: honors `isTrimMeshProtected` and cryptographic provenance tokens (`verifyMeshMetadata`), skips already-bounded outputs (`wasMeshBounded`), stamps `boundedBy: "opencode-trim"`, and cleans up session state on `session.deleted`.
-- **Smart Context Cap, 2-Stage Auto-Compact Fallback, Token Calibration & Bounded Secret-Redacted Vault (`trim_expand`):** Supports `contextWindowCap` (`"350k"` out-of-the-box default) for 1M+ models, 2-stage automatic compaction fallback (`autoCompact: true` — prunes first, then triggers `ctx.session.compact({ sessionID, delivery: "queue" })` with in-flight/cooldown loop protection if post-prune context still reaches `maxTokens`), post-prune provider-reported token calibration, start-band (`65%`) prompt-cache admission unlocking, signed reasoning/thinking block protection (`signature`, `thought_signature`, `encrypted_content`), historical JSON/XML/HTML pruning, compaction-boundary cache reset, structural cleaners (`scrubBlobs`, `filterDebugLogs`, `collapseStackTraces`, `collapseTablePadding`, `collapseRepetitionLoops`) with bounded RAM LRU memoization, `pruneHistoricalReasoning`, `pruneUnrelatedDiagnostics`, `purgeErrorInputs`, `ToolDedupeRing`, and a bounded, secret-redacted SQLite `vault` (`trim_expand` with ref discovery, line-range & bounded regex `grep` slicing).
+- **Smart Context Cap, 2-Stage Auto-Compact Fallback, Token Calibration & Bounded Secret-Redacted Vault (`trim_expand`):** Supports `contextWindowCap` (`"250k"` out-of-the-box default) for 1M+ models, 2-stage automatic compaction fallback (`autoCompact: true` — prunes first, then triggers `ctx.session.compact({ sessionID, delivery: "queue" })` with in-flight/cooldown loop protection if post-prune context still reaches `maxTokens`), post-prune provider-reported token calibration, start-band (`65%`) prompt-cache admission unlocking, cold-cache opportunity window (`cacheTtlMs: 300000`) + warm-cache break-even gating (`cacheMinSavingsChars: 6000`), write-invalidated stale-read pruning, signed reasoning/thinking block protection (`signature`, `thought_signature`, `encrypted_content`), historical JSON/XML/HTML pruning, compaction-boundary cache reset, structural cleaners (`scrubBlobs`, `filterDebugLogs`, `collapseStackTraces`, `collapseTablePadding`, `collapseRepetitionLoops`) with bounded RAM LRU memoization, `pruneHistoricalReasoning`, `pruneUnrelatedDiagnostics`, `purgeErrorInputs`, `ToolDedupeRing` (`dedupeWindow: 8`), `prunePreviewLines: 2`, and a bounded, secret-redacted SQLite `vault` (`trim_expand` with ref discovery, line-range & bounded regex `grep` slicing).
 - **Strict TypeScript & Zero Runtime Dependencies:** Pure strict TypeScript (`src/*.ts`, `src/tui.tsx`) compiled to `dist/*.js` + `.d.ts` targeting Node.js 26 Active LTS (`^26.0.0`) with zero external runtime dependencies.
 
 ---
 
 ## 📦 Installation
 
-The current version is **0.11.0** (OpenCode **V2 `>=2.3.0`**, verified on **`v2.4.1`**, Node.js **`^26.0.0`**).
+The current version is **0.11.1** (OpenCode **V2 `>=2.3.0`**, verified on **`v2.4.1`**, Node.js **`^26.0.0`**).
 
 OpenCode Trim supports **Global**, **Project-Local**, **`.opencode/plugins/` Local Wrapper / Symlink**, **Local Development (`file://`)**, and **Remote TUI Client (`cli.json`)** installation modes.
 
@@ -76,15 +76,16 @@ Or pin an exact version and configure optional features (such as the TUI sidebar
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     [
-      "opencode-trim@0.11.0",
+      "opencode-trim@0.11.1",
       {
-        "maxTokens": "350k",
+        "maxTokens": "250k",
         "tui": {
           "enabled": true
         },
         "memory": {
           "enabled": true,
-          "retentionDays": 90
+          "retentionDays": 60,
+          "recentWork": true
         }
       }
     ]
@@ -217,7 +218,7 @@ For CLI-only remote-server connections where the OpenCode server runs on a remot
    - Verifies that every failure, warning, stack frame, exit notice, and summary line survived and at least `minSavingsRatio` (`15%`) was saved; stamps `metadata["opencode-mesh"].boundedBy = "opencode-trim"`.
 2. **Outgoing Model Context Hook (`ctx.session.hook("context")`)**:
    - Pairs `tool-call` parts with `tool-result` parts in strict FIFO order per `callId`.
-   - Protects mesh-stamped parts (`isTrimMeshProtected` with provenance token verification), failed/nonzero-exit results, write/edit/task/question/todo/security/MCP tools, instruction/secret files, structured/diagnostic outputs, the newest `protectRecentMessages` (`14`), a token-sized tail (`protectRecentTokens`, `4096` floor / `6%–25%` of usable window), and the newest `keepRecentToolResults` (`12`).
+   - Protects mesh-stamped parts (`isTrimMeshProtected` with provenance token verification), failed/nonzero-exit results, write/edit/task/question/todo/security/MCP tools, instruction/secret files, structured/diagnostic outputs, the newest `protectRecentMessages` (`10`), a token-sized tail (`protectRecentTokens`, `4096` floor / `6%–25%` of usable window), and the newest `keepRecentToolResults` (`8`).
    - Replays committed per-session drops from `ContextCache` for prompt-cache stability, admitting new drops only when context pressure, range supersession, or the absolute tool-char budget authorizes reclamation.
 
 ---
@@ -295,15 +296,15 @@ Because OpenCode V2 auto-discovers `./tui` from `package.json`, the sidebar uses
 ### 🔽 Open / Normal View (Default)
 
 ```text
-▼ [ trim ] v0.11.0 · ● healthy
+▼ [ trim ] v0.11.1 · ● healthy
 
   ██████████████████████████████████
   sys 10%      chat 24%     tools 66%
-  Context             106k/350k · 30%
+  Context             106k/250k · 42%
   Compactions       1 compact · 12m ago
 ```
 
-- **Header:** Clickable 3-mode pill header (`▼ [ trim ]` / `▶ [ trim ]`) cycling **Normal → Detail → Minimal**, showing current version (`v0.11.0`), live health status (`● healthy` / `● caution` / `● critical`), and status marker (`!` when stale, `?` before first snapshot).
+- **Header:** Clickable 3-mode pill header (`▼ [ trim ]` / `▶ [ trim ]`) cycling **Normal → Detail → Minimal**, showing current version (`v0.11.1`), live health status (`● healthy` / `● caution` / `● critical`), and status marker (`!` when stale, `?` before first snapshot).
 - **Centered 100%-Filled 3-Color Composition Bar:** Always fills 100% of the bar width centered inside the sidebar with `sys` (purple), `chat` (cyan), and `tools` (green) estimated character shares, with bold aligned `sys X%` / `chat Y%` / `tools Z%` percentages directly underneath (`sys + chat + tools = 100%`).
 - **Dynamic Two-Column `StatRow` Metrics & `/trim` Command:** `Context` adapts automatically to the user's active configuration (`maxTokens` / `pruneAt` cap when active, or full model window otherwise, evaluated against configured `pressureStartRatio` / `pressureForceRatio`). Run **`/trim`** (or `/trim-gain`) in the prompt for a full savings breakdown (including top-3 tool consumers, system/schema overhead diagnostics, and post-compaction effectiveness check), or `/trim minimal | normal | detail | toggle` to switch sidebar modes.
 
@@ -312,11 +313,11 @@ Because OpenCode V2 auto-discovers `./tui` from `package.json`, the sidebar uses
 Clicking the `trim` header cycles to the two-column detail breakdown and then to the 1-line minimal bar:
 
 ```text
-▼ [ trim ] v0.11.0 · ● healthy
+▼ [ trim ] v0.11.1 · ● healthy
 
   ██████████████████████████████████
   sys 10%      chat 24%     tools 66%
-  Context       106k/350k · 30% (1M)
+  Context       106k/250k · 42% (1M)
   Session                        14d
   Compactions       1 manual compact
   Saved                   -18M chars
@@ -347,7 +348,7 @@ When `memory.enabled: true` is configured, OpenCode Trim archives native compact
   - Ranks matches by distinct query-term hits first, then newest within the same session, then BM25 rank and recency (scanning up to `1,000` rows / `8,000,000` chars inside a read transaction).
   - Enforces `agentAllowlist` and `agentDenylist` in `ctx.tool.hook("execute.before")`.
 - **Bounded, Secret-Redacted Recoverable Pruning Vault & Ref Discovery (`trim_expand`):**
-  - Stores pruned tool outputs in a project-scoped SQLite `vault` table (`maxVaultRows: 500` per project, `retentionDays: 90` default).
+  - Stores pruned tool outputs in a project-scoped SQLite `vault` table (`maxVaultRows: 500` per project, `retentionDays: 60` default).
   - **Not Byte-For-Byte Lossless (Redaction, Truncation & Retention Boundaries):**
     1. **Secret Redaction:** Every stored output is scrubbed via `redactSecrets` (`[REDACTED]`) before insertion; unclosed or over-depth (`>32` nesting or `>200,000`-char scan window) structured secret values fail closed and redact through the end of the text. Redacted secrets cannot be recovered verbatim.
     2. **Storage & Retrieval Truncation:** Inputs over `MAX_TEXT_CHARS` (`1,000,000` chars) are sliced before storage. On retrieval, `trim_expand` prepends 1-based line numbers (`1: ...`), caps per-line regex testing at `4,096` chars, and truncates the returned text at `maxChars` (default `12,000`, configurable `200..50,000` chars).
@@ -370,25 +371,23 @@ OpenCode Trim includes the Universal OpenCode V2 Plugin Mesh Bridge (`src/bridge
 
 ## ⚙️ Configuration
 
-OpenCode Trim works **out of the box with zero configuration** (automatically capping 1M+ model context windows at **`350k` tokens** with **`autoCompact: true`** so sessions stay fast, focused, and cache-friendly).
+OpenCode Trim works **out of the box with zero configuration** (automatically capping 1M+ model context windows at **`250k` tokens** with **`autoCompact: true`**, `dedupeWindow: 8`, `prunePreviewLines: 2`, and cold-cache/break-even gating so sessions stay fast, focused, and cache-friendly).
 
-### 🎯 Recommended Full `opencode.json` Setup (Best Stability & Zero-Reset Pruning)
+### 🎯 Recommended Full `opencode.json` Setup (Best Stability & Performance)
 
-For the most stable experience in `opencode.json`, combine OpenCode's background compaction setting with OpenCode Trim's screen-matched `"maxTokens": "350k"` and 2-stage `autoCompact` guarantee:
+For the most stable, low-latency experience in `opencode.json`, combine OpenCode's compaction setting with OpenCode Trim's screen-matched `"maxTokens": "250k"`, 2-stage `autoCompact` guarantee, TUI sidebar, and compact 60-day memory + frozen `<recent_work>`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "compaction": {
-    "auto": true,
-    "background": true,
-    "buffer": "65%"
+    "auto": false
   },
   "plugins": [
     {
       "package": "opencode-trim@latest",
       "options": {
-        "maxTokens": "350k",
+        "maxTokens": "250k",
         "autoCompact": true,
         "compactionInputPruning": true,
         "tui": {
@@ -396,7 +395,8 @@ For the most stable experience in `opencode.json`, combine OpenCode's background
         },
         "memory": {
           "enabled": true,
-          "retentionDays": 3650
+          "retentionDays": 60,
+          "recentWork": true
         }
       }
     }
@@ -404,29 +404,28 @@ For the most stable experience in `opencode.json`, combine OpenCode's background
 }
 ```
 
-#### 🔄 How the 2-Stage `"350k"` Lifecycle Works in Practice
+#### 🔄 How the 2-Stage `"250k"` Lifecycle Works in Practice
 
-1. **Stage 1 — Continuous Pruning First (Keep Context Under `350k` Without Resetting Memory):**
-   - As your session grows (or even if you install the plugin on an existing **`650k+` token** session), OpenCode Trim first prunes old read-only tool outputs (`shell`, `read`, `grep`, `glob`, `webfetch`, `<prefix>_search|zoom|outline...`) and unsigned historical reasoning traces into the recoverable SQLite `tool_vault` (`<trim-ref id="trm_..." />`), while protecting the last 14 messages and active diagnostics.
-   - **65% (`~227k` tokens):** Soft pruning begins.
-   - **85% (`~297k` tokens):** Force-band pruning reclaims older tool outputs.
-   - **94% (`~329k` tokens):** Critical-band pruning reclaims maximum eligible tool mass.
-   - If pruning brings a `650k` session back down below `350k` (e.g. to `~180k–220k`), **compaction is skipped** so your conversation history is not reset.
+1. **Stage 1 — Continuous Pruning First (Keep Context Under `250k` Without Resetting Memory):**
+   - As your session grows (or even if you install the plugin on an existing **`650k+` token** session), OpenCode Trim first prunes old read-only tool outputs (`shell`, `read`, `grep`, `glob`, `webfetch`, `<prefix>_search|zoom|outline...`), write-invalidated stale `read`s, and unsigned historical reasoning traces into the recoverable SQLite `tool_vault` (`<trim-ref id="trm_..." />` with 2-line head/tail preview), while protecting the last 10 messages, last 8 tool results, and active diagnostics.
+   - **65% (`~162k` tokens):** Soft pruning begins (and cold-cache idle `>= 5m` or cache-miss turns clean up with zero cache penalty).
+   - **85% (`~212k` tokens):** Force-band pruning reclaims older tool outputs.
+   - **94% (`~235k` tokens):** Critical-band pruning reclaims maximum eligible tool mass.
+   - If pruning brings a large session back down below `250k` (e.g. to `~140k–180k`), **compaction is skipped** so your conversation history is not reset.
 2. **Stage 2 — Automatic Compaction Fallback (`autoCompact: true`):**
-   - When plain conversation text alone fills `350k+` tokens (so even **after** pruning all eligible old tool outputs, the remaining context still meets or exceeds `maxTokens`), OpenCode Trim automatically triggers `ctx.session.compact({ sessionID, delivery: "queue" })` (with a 3-layer `inFlight` + 3-turn cooldown + message-count hysteresis guard so it never loops).
-   - With `"background": true` in OpenCode's `"compaction"` block, compaction runs quietly in the background without interrupting your active screen.
+   - When plain conversation text alone fills `250k+` tokens (so even **after** pruning all eligible old tool outputs, the remaining context still meets or exceeds `maxTokens`), OpenCode Trim automatically triggers `ctx.session.compact({ sessionID, delivery: "queue" })` (with a 3-layer `inFlight` + 3-turn cooldown + message-count hysteresis guard so it never loops) and verifies post-compaction reduction on the next turn.
 
 ### 🎛️ Simple Options Reference
 
-You only need to enter the exact **token count** (e.g. `"350k"` or `350000`) or **`% used`** (e.g. `"35%"`) you see on the OpenCode `Context` screen — no manual reserve or ratio math required:
+You only need to enter the exact **token count** (e.g. `"250k"` or `250000`) or **`% used`** (e.g. `"25%"`) you see on the OpenCode `Context` screen — no manual reserve or ratio math required:
 
 | Simple Option | Default | Examples | What It Does |
 | :--- | :---: | :--- | :--- |
-| `maxTokens` | `"350k"` (`350000`) | `"350k"`, `"250k"`, `350000`, `0` | Direct target context ceiling matching the OpenCode `Context` token counter (`0` = uncapped model limit). |
-| `pruneAt` | — | `"350k"`, `"35%"`, `35`, `0.35` | Direct threshold by token count (`"350k"`) or percentage of model window (`"35%"`). |
+| `maxTokens` | `"250k"` (`250000`) | `"250k"`, `"350k"`, `250000`, `0` | Direct target context ceiling matching the OpenCode `Context` token counter (`0` = uncapped model limit). |
+| `pruneAt` | — | `"250k"`, `"25%"`, `25`, `0.25` | Direct threshold by token count (`"250k"`) or percentage of model window (`"25%"`). |
 | `autoCompact` | `true` | `true` / `false` | 2-stage automatic guarantee: prunes eligible old tool/reasoning outputs first, then triggers `ctx.session.compact({ sessionID, delivery: "queue" })` if post-prune context still reaches `maxTokens`. |
 | `compactionInputPruning` | `false` (Recommended: `true`) | `true` / `false` | Also prune old tool outputs from native compaction summarization inputs so compaction summaries finish faster and cleaner. |
-| `tui.enabled` | `false` (Recommended: `true`) | `true` / `false` | Show the compact `Trim` sidebar widget in the OpenCode TUI. |
+| `tui.enabled` | `false` (Recommended: `true`) | `true` / `false` | Show the compact `Trim` sidebar widget and `/trim` command in the OpenCode TUI. |
 | `memory.enabled` | `false` (Recommended: `true`) | `true` / `false` | Enable the SQLite FTS5 compaction archive (`trim_history_search`) and recoverable pruning vault (`trim_expand`). |
 
 ### 🔧 Advanced Engine Options (Optional)
@@ -437,7 +436,7 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 | :--- | :---: | :---: | :--- |
 | `enabled` | `true` | `boolean` | Master switch for the plugin. |
 | `shell` | `true` | `boolean` | Compress eligible `shell` / `bash` outputs. |
-| `toolFiltering` | `true` | `boolean` | Fold consecutive identical lines in `grep`, `glob`, `ls`, `list`, `find`. |
+| `toolFiltering` | `true` | `boolean` | Fold consecutive identical lines and compact path prefixes in `grep`, `glob`, `ls`, `list`, `find`. |
 | `pruning` | `true` | `boolean` | Prune old, safe, completed tool outputs from outgoing model context. |
 | `compactionInputPruning` | `false` | `boolean` | Also prune old tool outputs from native compaction request inputs. |
 | `autoCompact` | `true` | `boolean` | Trigger `ctx.session.compact({ sessionID, delivery: "queue" })` with in-flight/cooldown loop protection when post-prune context still reaches `usableTokens`. |
@@ -447,10 +446,10 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 | `maxOutputLines` | `160` | `20..2000` | Maximum lines allowed in a compressed shell output. |
 | `maxOutputChars` | `16000` | `2000..1000000` | Maximum characters allowed in a compressed shell output. |
 | `maxInputScanChars` | `2000000` | `10000..5000000` | Hard input scan ceiling; larger outputs pass through untouched. |
-| `protectRecentMessages` | `14` | `4..100` | Number of newest messages protected from pruning. |
+| `protectRecentMessages` | `10` | `4..100` | Number of newest messages protected from pruning. |
 | `protectRecentTokens` | `4096` | `1024..64000` | Token tail protection floor (also at least `6%` of usable context, capped at `25%`). |
-| `keepRecentToolResults` | `12` | `1..100` | Number of newest eligible tool results always kept unpruned. |
-| `pruneAfterToolChars` | `100000` | `10000..2000000` | Absolute tool-result character budget when model pressure is unavailable. |
+| `keepRecentToolResults` | `8` | `1..100` | Number of newest eligible tool results always kept unpruned. |
+| `pruneAfterToolChars` | `75000` | `10000..2000000` | Absolute tool-result character budget when model pressure is unavailable. |
 | `pruneMinResultChars` | `800` | `100..200000` | Minimum length of an individual tool result to be eligible for pruning. |
 | `pruneEligibleTools` | `["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find", "webfetch"]` | Up to 40 tool names | Allowlist of core tool names eligible for read-only context pruning (generic read-only `<prefix>_search\|read\|grep\|glob\|list\|find\|zoom\|outline\|inspect\|view\|lookup\|symbols\|references\|definition\|callers\|callees\|imports\|tree\|stat` tools are also recognized automatically). |
 | `pressureStartRatio` | `0.65` | `0.2..0.9` | Context usage ratio where pressure-based pruning begins. |
@@ -458,17 +457,20 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 | `pressureCriticalRatio` | `0.94` | `0.7..0.999` | Critical context usage ratio for aggressive target reclamation. |
 | `outputReserveTokens` | `8192` | `1024..100000` | Output token reserve subtracted from uncapped model context windows. |
 | `contextWindow` | `0` | `0..10000000` | Explicit context window fallback for custom providers (`0` = disabled). |
-| `contextWindowCap` | `350000` | `0..10000000` (or `"350k"`) | Default cap (`min(catalog, cap)`) on large 1M+ model windows (`0` = uncapped). |
+| `contextWindowCap` | `250000` | `0..10000000` (or `"250k"`) | Default cap (`min(catalog, cap)`) on large 1M+ model windows (`0` = uncapped). |
 | `supersessionMinChars` | `5000` | `100..200000` | Minimum superseded character mass required to trigger supersession pruning. |
 | `purgeErrorInputs` | `true` | `boolean` | Blank oversized input arguments on stale failed tool calls outside the protected tail while keeping error outputs intact. |
 | `pruneHistoricalReasoning` | `true` | `boolean` | Omit historical `reasoning` / `thinking` traces on assistant turns outside the protected tail while preserving current-turn reasoning and prose. |
 | `pruneUnrelatedDiagnostics` | `true` | `boolean` | Filter `metadata.diagnostics` on completed `edit`, `write`, and `apply_patch` calls so only diagnostics for the edited file(s) are retained. |
-| `prunePreviewLines` | `0` | `0..20` | Preserve `N` head and `N` tail preview lines around the pruning notice when the combined preview is significantly smaller than the original (`0` = notice only). |
-| `dedupeWindow` | `0` | `0..32` | Same-session verified content-hash deduplication window for consecutive identical non-`read` tool outputs (`0` = disabled). |
+| `prunePreviewLines` | `2` | `0..20` | Preserve `N` head and `N` tail preview lines around the pruning notice when the combined preview is significantly smaller than the original (`0` = notice only). |
+| `dedupeWindow` | `8` | `0..32` | Same-session verified content-hash deduplication window for consecutive identical non-`read` tool outputs (`0` = disabled; skipped in Code Mode). |
+| `cacheTtlMs` | `300000` | `0..3600000` | Idle prompt-cache TTL in ms (5 min default): opens zero-penalty cold-cache pruning when idle `>= cacheTtlMs` (`0` = disabled). |
+| `cacheMinSavingsChars` | `6000` | `0..200000` | Minimum net-new character savings floor required before breaking a verified warm prompt cache. |
 | `filterRules` | `[]` | Up to 24 rules | Custom per-program `{ program, dropPrefixes, dropExact }` line filters. |
 | `memory.enabled` | `false` | `boolean` | Enable the SQLite FTS5 compaction-summary archive (`trim_history_search`) and recoverable pruned-output vault (`trim_expand`). |
 | `memory.dbPath` | `$XDG_DATA_HOME/opencode-trim/memory.db` | Absolute path or `":memory:"` | SQLite database file path (`0600` file, `0700` newly created directory). |
-| `memory.retentionDays` | `90` | `1..3650` | Per-project retention window in days. |
+| `memory.retentionDays` | `60` | `1..3650` | Per-project retention window in days. |
+| `memory.recentWork` | `false` | `boolean` | Opt-in: inject a byte-identical frozen `<recent_work>` block once per top-level session from `memory.db` (skipped for subagents). |
 | `memory.agentAllowlist` | `[]` | Up to 20 agent names | Optional allowlist for `trim_history_search` (empty = host permissions decide). |
 | `memory.agentDenylist` | `[]` | Up to 20 agent names | Optional denylist for `trim_history_search` (denylist wins over allowlist). |
 | `tui.enabled` | `false` | `boolean` | Enable the `opencode-trim-stats` RPC provider and TUI sidebar widget. |
