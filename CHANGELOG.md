@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.4 — 2026-11-24
+
+- **OpenCode V2.4.1 Deep Audit & Hardening (`src/tui.tsx`, `src/plugin.ts`, `src/stats.ts`, `src/memory.ts`, `src/bridge.ts`)**:
+  - **TUI Session Isolation & `v2.4.x` Events (`src/tui.tsx`):** Reset `latestState` on session switch and `activeSessionID` on cleanup so `/trim` never mixes prior-session data; added `session.execution.{succeeded,failed,interrupted}` to `REFRESH_EVENTS` for immediate post-turn sidebar updates; aligned native model limit resolution to `limit.input ?? limit.context` matching `src/pressure.ts`.
+  - **Server Dynamic Catalog & Session Cleanup (`src/plugin.ts`, `src/stats.ts`):** Subscribed to `model.updated` and `provider.updated` on the server event stream to refresh `modelLimits` and clear `modelLookups` dynamically under `v2.4.0+` non-blocking startup; added `stats.forgetSession(sid)` invoked on `session.deleted` to evict deleted sessions and cancel pending RPC emits.
+  - **Multi-Location Gate & Vault Schema Hygiene (`src/memory.ts`, `src/bridge.ts`):** Added fail-closed `locationState` filtering to the `execute.before` gate, updated `trim_expand` `tool` filter examples to ephemeral tools (`"shell"`, `"webfetch"`), and synced `src/bridge.ts` with canonical `BRIDGE_REVISION: 2.3.1` (`bindingOwner`).
+- **Verification**: **`544 / 544`** tests passing across 29 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
+
 ## 0.11.3 — 2026-11-24
 
 - **Critical Fix: OpenCode V2 `SystemPart` Schema Compliance for `memory.recentWork` (`src/memory.ts`)**:

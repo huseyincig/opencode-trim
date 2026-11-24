@@ -350,6 +350,13 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
             for (const [id, s] of sessions)
                 changed(id, s);
         },
+        forgetSession(sessionID) {
+            const id = sidOf(sessionID);
+            if (!id)
+                return false;
+            pending.delete(id);
+            return sessions.delete(id);
+        },
         snapshot,
         dispose() {
             disposed = true;

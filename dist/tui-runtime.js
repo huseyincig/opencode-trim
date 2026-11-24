@@ -19,7 +19,7 @@ const IDLE_TICK_MS = 30_000;
 const MAX_HIDDEN_RETRIES = 3;
 const COLLAPSED_BAR_WIDTH = 14;
 const EXPANDED_BAR_WIDTH = 34;
-const REFRESH_EVENTS = ["session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.step.ended"];
+const REFRESH_EVENTS = ["session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.step.ended", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"];
 const RELOAD_EVENTS = ["plugin.updated", "model.updated", "provider.updated"];
 function messageListKey(list) {
   if (!Array.isArray(list)) return "none";
@@ -212,6 +212,15 @@ export default Plugin.define({
       const running = () => !!props.sessionID && context.data?.session?.status?.(props.sessionID) === "running";
       createEffect(on(() => props.sessionID, sessionID => {
         activeSessionID = sessionID;
+        latestState = {
+          snapshot: null,
+          nativeTokens: null,
+          nativeLimit: null,
+          sessionCreatedAt: null,
+          history: null,
+          compDetails: null,
+          msgBreakdown: null
+        };
         setSnapshot(null);
         setFailed(false);
         setNativeTokens(null);
@@ -252,7 +261,7 @@ export default Plugin.define({
             await Promise.resolve(models.sync(context.location));
             found = find(await Promise.resolve(models.list(context.location)));
           }
-          const v = found?.limit?.context;
+          const v = found?.limit?.input ?? found?.limit?.context;
           const limit = typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
           return {
             limit,
@@ -421,6 +430,7 @@ export default Plugin.define({
         onCleanup(() => {
           disposed = true;
           seq++;
+          if (activeSessionID === sessionID) activeSessionID = undefined;
           if (timer) clearTimeout(timer);
           clearInterval(watcher);
           for (const off of unsubs) {

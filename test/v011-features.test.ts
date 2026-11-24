@@ -6,8 +6,10 @@ import { pruneContext, stableMessageKey } from '../src/prune.ts';
 import { estimateRequest } from '../src/pressure.ts';
 import { createTrimStats } from '../src/stats.ts';
 import { buildGainReport, normalizeSnapshot } from '../src/tui-model.ts';
+import { readFileSync } from 'node:fs';
 import { openMemoryStore } from '../src/memory-store.ts';
 import { setupMemory, TOOL_NAME } from '../src/memory.ts';
+import { setupTrim } from '../src/plugin.ts';
 
 const isAscii = (s: string) => /^[\x20-\x7e]*$/.test(s);
 
@@ -345,4 +347,110 @@ test('Live-disk file/code tools are never vaulted and direct model to re-read li
   // Re-running pruneContext must NOT double-prune liveDiskNotice
   const res2 = pruneContext({ sessionID: 's-live', messages }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 }, vault });
   assert.equal(res2.pruned, 0);
+});
+
+test('Deep V2.4.1 audit: stats.forgetSession, dynamic model.updated catalog refresh, foreign-location gate, and TUI contracts', async () => {
+  // 1. stats.forgetSession removes deleted session state and cancels pending emits
+  const emitted: string[] = [];
+  const stats = createTrimStats({
+    options: parseOptions({ tui: { enabled: true } }),
+    emit: (sid) => { emitted.push(sid); },
+    emitIntervalMs: 50,
+  });
+  stats.recordTool({ sessionID: 's-del', kind: 'shell', changed: true, savedChars: 5000 });
+  assert.equal(stats.snapshot('s-del').shell.savedChars, 5000);
+  assert.equal(stats.forgetSession('s-del'), true);
+  assert.equal(stats.snapshot('s-del').shell.savedChars, 0);
+  assert.equal(stats.snapshot('s-del').since, null);
+  await new Promise((r) => setTimeout(r, 80));
+  assert.deepEqual(emitted, [], 'pending emit for deleted session must be cancelled');
+  stats.dispose();
+
+  // 2. setupTrim handles model.updated / provider.updated catalog refresh + session.deleted stats cleanup
+  let modelCallCount = 0;
+  let pushEvent: ((ev: any) => void) | null = null;
+  let endEvents: (() => void) | null = null;
+  const eventQueue: any[] = [];
+  let closed = false;
+  const eventStream = {
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          if (eventQueue.length) return Promise.resolve({ value: eventQueue.shift(), done: false });
+          if (closed) return Promise.resolve({ value: undefined, done: true });
+          return new Promise((resolve) => {
+            pushEvent = (ev) => { pushEvent = null; resolve({ value: ev, done: false }); };
+            endEvents = () => { closed = true; resolve({ value: undefined, done: true }); };
+          });
+        },
+      };
+    },
+  };
+  const emitHostEvent = (ev: any) => {
+    if (pushEvent) pushEvent(ev);
+    else eventQueue.push(ev);
+  };
+  let contextHook: any;
+  let rpcHandlers: any;
+  const ctx: any = {
+    location: { directory: '/tmp/trim-audit-proj' },
+    options: { tui: { enabled: true }, contextWindowCap: 0 },
+    model: {
+      list: async () => {
+        modelCallCount++;
+        return modelCallCount <= 1
+          ? [{ providerID: 'prov', id: 'm1', limit: { context: 100_000, output: 8192 } }]
+          : [{ providerID: 'prov', id: 'm1', limit: { context: 200_000, output: 8192 } }];
+      },
+    },
+    tool: { hook: async () => ({ dispose() {} }) },
+    session: {
+      hook: async (name: string, cb: any) => { if (name === 'context') contextHook = cb; return { dispose() {} }; },
+    },
+    rpc: { register: async (_def: any, handlers: any) => { rpcHandlers = handlers; return { events: { emit() {} }, dispose() {} }; } },
+    event: { subscribe: async () => eventStream },
+  };
+  const cleanupTrim = await setupTrim(ctx);
+  await new Promise((r) => setTimeout(r, 20));
+  await contextHook({ sessionID: 's-dyn', model: { providerID: 'prov', id: 'm1' }, system: [], messages: [{ id: 'u1', role: 'user', content: 'hi' }], tools: {} });
+  assert.equal((await rpcHandlers.snapshot({ sessionID: 's-dyn' })).context.limitTokens, 100_000);
+
+  // Trigger model.updated -> catalog refreshes limit to 200_000
+  emitHostEvent({ type: 'model.updated', location: { directory: '/tmp/trim-audit-proj' } });
+  await new Promise((r) => setTimeout(r, 30));
+  await contextHook({ sessionID: 's-dyn', model: { providerID: 'prov', id: 'm1' }, system: [], messages: [{ id: 'u1', role: 'user', content: 'hi' }], tools: {} });
+  assert.equal((await rpcHandlers.snapshot({ sessionID: 's-dyn' })).context.limitTokens, 200_000);
+
+  // Trigger session.deleted -> stats evicted
+  emitHostEvent({ type: 'session.deleted', location: { directory: '/tmp/trim-audit-proj' }, data: { sessionID: 's-dyn' } });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal((await rpcHandlers.snapshot({ sessionID: 's-dyn' })).context.known, false);
+  endEvents?.();
+  await cleanupTrim();
+
+  // 3. setupMemory execute.before gate ignores foreign-location events while enforcing local agentDenylist
+  let beforeGate: any;
+  const memCtx: any = {
+    location: { directory: '/tmp/trim-audit-local' },
+    tool: {
+      hook: async (name: string, cb: any) => { if (name === 'execute.before') beforeGate = cb; return { dispose() {} }; },
+      transform: async (fn: any) => { fn({ add() {} }); return { dispose() {} }; },
+    },
+    session: { hook: async () => ({ dispose() {} }) },
+    event: { subscribe: async () => ({ async *[Symbol.asyncIterator]() {} }) },
+  };
+  const cleanupMem = await setupMemory(memCtx, parseOptions({ memory: { enabled: true, dbPath: ':memory:', agentDenylist: ['restricted-agent'] } }));
+  // Local denied agent is rejected
+  assert.throws(() => beforeGate({ tool: TOOL_NAME, agent: 'restricted-agent', location: { directory: '/tmp/trim-audit-local' } }), /not available/);
+  // Foreign location event is ignored (does not cross-block another project)
+  assert.doesNotThrow(() => beforeGate({ tool: TOOL_NAME, agent: 'restricted-agent', location: { directory: '/tmp/trim-audit-other' } }));
+  await cleanupMem();
+
+  // 4. TUI source contract: latestState resets on session switch, subscribes to v2.4.x session.execution.*, reads limit.input ?? limit.context
+  const tuiSrc = readFileSync(new URL('../src/tui.tsx', import.meta.url), 'utf8');
+  assert.match(tuiSrc, /"session\.execution\.succeeded"/);
+  assert.match(tuiSrc, /"session\.execution\.failed"/);
+  assert.match(tuiSrc, /"session\.execution\.interrupted"/);
+  assert.match(tuiSrc, /latestState\s*=\s*\{\s*snapshot:\s*null/);
+  assert.match(tuiSrc, /found\?\.limit\?\.input\s*\?\?\s*found\?\.limit\?\.context/);
 });

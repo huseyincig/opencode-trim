@@ -650,6 +650,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     autoCompactState.delete(sid);
     reduceQueue.delete(sid);
     nativeBySession.delete(sid);appliedChars.delete(sid);nativeSeeded.delete(sid);
+    observe((s: any)=>s.forgetSession?.(sid));
     try{forgetMemorySession?.(sid);}catch{/* ignore */}
   };
   registrations.push({
@@ -781,12 +782,20 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
       if(typeof ctx?.event?.subscribe==='function'){
         subscriptionAbort=new AbortController();
         const signal=subscriptionAbort.signal;
-        const subscription=await ctx.event.subscribe({signal,types:[...COMPACTION_EVENTS,'session.step.ended','session.deleted']});
+        const subscription=await ctx.event.subscribe({signal,types:[...COMPACTION_EVENTS,'session.step.ended','session.deleted','model.updated','provider.updated']});
         (async()=>{
           try{
             for await(const e of subscription){
               if(signal.aborted)break;
               if(foreignEvent(e))continue;
+              if(e?.type==='model.updated'||e?.type==='provider.updated'){
+                modelLookups.clear();
+                void discoverModelLimits(ctx).then((fresh)=>{
+                  if(disposed)return;
+                  for(const [k,v] of fresh)modelLimits.set(k,v);
+                }).catch(()=>{});
+                continue;
+              }
               const p=obj(e?.data)?e.data:obj(e?.properties)?e.properties:(obj(e)?e:{});
               const sid=p.sessionID??p.sessionId??e?.sessionID;
               if(e?.type==='session.step.ended'){
@@ -865,7 +874,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   }
   return async()=>{
     if(disposed)return;
-    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();reduceQueue.clear();nativeBySession.clear();appliedChars.clear();nativeSeeded.clear();modelLimits.clear();activeVault=null;
+    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();reduceQueue.clear();nativeBySession.clear();appliedChars.clear();nativeSeeded.clear();modelLimits.clear();modelLookups.clear();activeVault=null;
     if(memoryStop)await Promise.resolve().then(memoryStop).catch(()=>{});
     await Promise.allSettled(registrations.reverse().map(reg=>reg.dispose()));
     await dispose();

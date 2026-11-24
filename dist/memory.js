@@ -273,6 +273,9 @@ export async function setupMemory(ctx, opts, hooks) {
         regs.push(validReg(await ctx.tool.hook('execute.before', (event) => {
             if (event?.tool !== TOOL_NAME && event?.tool !== EXPAND_TOOL_NAME)
                 return;
+            const ls = locationState(event, localDir);
+            if (ls !== 'local' && ls !== 'absent')
+                return;
             const agent = agentOf(event);
             // Empty allowlist = no plugin-level restriction (host permissions decide).
             if ((agent && deny.has(agent)) || (allow.size && (!agent || !allow.has(agent))))
@@ -286,7 +289,7 @@ export async function setupMemory(ctx, opts, hooks) {
                     type: 'object',
                     properties: {
                         id: { type: 'string', minLength: 1, maxLength: 128, description: 'Cached ref ID from a pruning notice (e.g. "trm_..."). Omit `id` to search across the vault (with `grep`) or list recent cached refs.' },
-                        tool: { type: 'string', maxLength: 64, description: 'Optional discovery/search filter when `id` is omitted: filter cached refs by tool name (e.g. "read", "shell").' },
+                        tool: { type: 'string', maxLength: 64, description: 'Optional discovery/search filter when `id` is omitted: filter cached refs by tool name (e.g. "shell", "webfetch").' },
                         target: { type: 'string', maxLength: 256, description: 'Optional discovery/search filter when `id` is omitted: case-insensitive substring match on target path or command.' },
                         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Optional discovery/search limit when `id` is omitted (default 20, max 50).' },
                         startLine: { type: 'integer', minimum: 1, description: 'Optional 1-based start line (inclusive).' },

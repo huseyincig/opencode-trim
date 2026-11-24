@@ -295,6 +295,12 @@ export function createTrimStats({
       if (disposed || typeof emit !== 'function') return;
       for (const [id, s] of sessions) changed(id, s);
     },
+    forgetSession(sessionID?: unknown) {
+      const id = sidOf(sessionID);
+      if (!id) return false;
+      pending.delete(id);
+      return sessions.delete(id);
+    },
     snapshot,
     dispose() {
       disposed = true;
