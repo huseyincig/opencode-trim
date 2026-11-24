@@ -268,17 +268,17 @@ export async function setupMemory(ctx, opts, hooks) {
         regs.push(validReg(await ctx.tool.transform((editor) => {
             editor.add({
                 name: EXPAND_TOOL_NAME,
-                description: 'Restore, slice, or list pruned tool outputs cached by opencode-trim in the project vault. Pass `id` (e.g. "trm_...") with optional line range (startLine, endLine) and grep/regex filtering to inspect a cached output, or omit `id` (with optional `tool`, `target`, `limit`) to list recent cached refs.',
+                description: 'Restore, slice, search, or list pruned tool outputs cached by opencode-trim in the project vault. Pass `id` (e.g. "trm_...") with optional line range (startLine, endLine) and grep/regex to inspect a cached output; omit `id` and pass `grep` to search across all cached vault outputs; or omit both to list recent cached refs.',
                 input: {
                     type: 'object',
                     properties: {
-                        id: { type: 'string', minLength: 1, maxLength: 128, description: 'Cached ref ID from a pruning notice (e.g. "trm_..."). Omit `id` to list recent cached refs in the vault (discovery mode).' },
-                        tool: { type: 'string', maxLength: 64, description: 'Optional discovery filter when `id` is omitted: filter cached refs by tool name (e.g. "read", "shell").' },
-                        target: { type: 'string', maxLength: 256, description: 'Optional discovery filter when `id` is omitted: case-insensitive substring match on target path or command.' },
-                        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Optional discovery limit when `id` is omitted (default 20, max 50).' },
+                        id: { type: 'string', minLength: 1, maxLength: 128, description: 'Cached ref ID from a pruning notice (e.g. "trm_..."). Omit `id` to search across the vault (with `grep`) or list recent cached refs.' },
+                        tool: { type: 'string', maxLength: 64, description: 'Optional discovery/search filter when `id` is omitted: filter cached refs by tool name (e.g. "read", "shell").' },
+                        target: { type: 'string', maxLength: 256, description: 'Optional discovery/search filter when `id` is omitted: case-insensitive substring match on target path or command.' },
+                        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Optional discovery/search limit when `id` is omitted (default 20, max 50).' },
                         startLine: { type: 'integer', minimum: 1, description: 'Optional 1-based start line (inclusive).' },
                         endLine: { type: 'integer', minimum: 1, description: 'Optional 1-based end line (inclusive).' },
-                        grep: { type: 'string', maxLength: 200, description: 'Optional substring or regex line filter.' },
+                        grep: { type: 'string', maxLength: 200, description: 'Optional substring or regex line filter (within `id`, or across all project vault refs when `id` is omitted).' },
                         regex: { type: 'boolean', description: 'Optional: treat `grep` as a regular expression (bounded/ReDoS-checked) instead of a literal substring.' },
                         caseSensitive: { type: 'boolean', description: 'Optional: make `grep` matching case-sensitive (default false).' },
                         maxChars: { type: 'integer', minimum: 200, maximum: 50000, description: 'Optional maximum characters to return (default 12000).' },
@@ -294,10 +294,12 @@ export async function setupMemory(ctx, opts, hooks) {
                         tool: { type: ['string', 'null'] },
                         target: { type: ['string', 'null'] },
                         totalLines: { type: 'integer' },
+                        matchedRefs: { type: 'integer' },
                         matchedLines: { type: 'integer' },
                         truncated: { type: 'boolean' },
                         totalVaultRows: { type: 'integer' },
                         refs: { type: 'array' },
+                        matches: { type: 'array' },
                         text: { type: 'string' },
                     },
                     required: ['found', 'id', 'text'],
@@ -316,6 +318,25 @@ export async function setupMemory(ctx, opts, hooks) {
                         }
                         if (input?.limit !== undefined && input?.limit !== null && (typeof input.limit !== 'number' || !Number.isInteger(input.limit) || input.limit < 1 || input.limit > 50)) {
                             throw new Error('limit must be an integer between 1 and 50');
+                        }
+                        if (input?.grep !== undefined && input?.grep !== null) {
+                            if (typeof input.grep !== 'string' || !input.grep.trim() || input.grep.length > 200) {
+                                throw new Error('grep must be a non-empty string up to 200 chars');
+                            }
+                            if (input?.maxChars !== undefined && input?.maxChars !== null && (typeof input.maxChars !== 'number' || !Number.isInteger(input.maxChars) || input.maxChars < 200 || input.maxChars > 50000)) {
+                                throw new Error('maxChars must be an integer between 200 and 50000');
+                            }
+                            const out = store.searchVault({
+                                project,
+                                grep: input.grep,
+                                regex: input?.regex === true,
+                                caseSensitive: input?.caseSensitive === true,
+                                tool: input?.tool,
+                                target: input?.target,
+                                limit: input?.limit,
+                                maxChars: input?.maxChars,
+                            });
+                            return { content: out.text, output: out };
                         }
                         const out = store.listVault({
                             project,

@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import {
   buildCollapsedRows,
+  buildGainReport,
   buildHeader,
   buildRows,
   buildSections,
@@ -217,8 +218,8 @@ test("sections: ordered, only non-empty, label/value/tone/bar exposed", () => {
 })
 
 test("header: title with version, summary only collapsed, marker", () => {
-  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.9.4", summary: "68% | -106k | 12 | mem off", marker: "" })
-  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.9.4", summary: "", marker: "!" })
+  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.10.0", summary: "68% | -106k | 12 | mem off", marker: "" })
+  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.10.0", summary: "", marker: "!" })
   assert.equal(buildHeader(null).marker, "?")
   for (const h of [buildHeader(snap()), buildHeader(null, { expanded: true })]) assert.ok(isAscii(h.title + h.summary + h.marker))
 })
@@ -498,4 +499,35 @@ test("buildSidebarModel: 5 states, dynamic config budget, 100% composition bar, 
   assert.deepEqual(mRestart.detailLines.find((r) => r.key === "session")?.parts, ["session 3d", "2 manual compact"])
   assert.equal(mRestart.detailLines.find((r) => r.key === "saved")?.parts[0], "saved -42k chars")
   assert.deepEqual(mRestart.detailLines.find((r) => r.key === "memory")?.parts, ["memory 120 summaries", "45 vault"])
+  assert.deepEqual(mHealthy.normalRows.map((r) => [r.label, r.value]), [["Context", "106k/1M | 11%"], ["Compactions", "1 compact | 12m ago"]])
+  assert.deepEqual(mHealthy.detailRows.map((r) => [r.label, r.value]), [
+    ["Context", "106k/1M | 11%"],
+    ["Session", "14d"],
+    ["Compactions", "1 manual compact"],
+    ["Saved", "-18M chars"],
+    ["Cache", "stable"],
+    ["Memory", "3 sum | 12 vault"],
+  ])
+  assert.equal(mCapped.detailRows.find((r) => r.key === "context")?.value, "300k/350k | 86% (1M)")
+  assert.equal(mCapped.detailRows.find((r) => r.key === "cache"), undefined)
+  assert.equal(mCapped.detailRows.find((r) => r.key === "memory"), undefined)
+})
+
+test("buildGainReport: produces pure ASCII savings and composition breakdown for /trim", () => {
+  const T0 = 1_700_000_000_000
+  const rep = buildGainReport(snap({
+    now: T0,
+    context: {
+      known: true, estimatedTokens: 106000, usableTokens: 350000, limitTokens: 1000000, ratio: 106000 / 350000,
+      breakdown: { systemChars: 1000, chatChars: 2400, toolChars: 6600 },
+    },
+    memory: { enabled: true, active: true, summaries: 3, vaultRefs: 12, dbBytes: 4096 },
+  }), T0, { nativeTokens: 106000, nativeLimitTokens: 1000000 })
+  assert.ok(rep.split("\n").every((l) => isAscii(l)), rep)
+  assert.match(rep, /Trim v0\.10\.0 \(healthy\)/)
+  assert.match(rep, /Context: context 106k\/350k \| 30% \(1M\)/)
+  assert.match(rep, /Composition \(est\): sys 10% \| chat 24% \| tools 66%/)
+  assert.match(rep, /Savings: -106k chars/)
+  assert.match(rep, /shell: 18 runs \(-42k chars\)/)
+  assert.match(rep, /Tip: \/trim minimal \| normal \| detail \| toggle/)
 })

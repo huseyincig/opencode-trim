@@ -173,7 +173,7 @@ function totalSaved(snap) {
         }
     return any ? sum : null;
 }
-export const TRIM_VERSION = "0.9.4";
+export const TRIM_VERSION = "0.10.0";
 export const SECTION_TITLES = { context: "Context", optimization: "Optimization", compaction: "Compaction", memory: "Memory" };
 // Flat row model. Each row: key, section, kind (stat|warn), label, value, tone, line (compat).
 export function buildRows(raw, now = Date.now(), options = {}) {
@@ -749,6 +749,63 @@ export function buildSidebarModel(raw, now = Date.now(), options = {}) {
             detailLines.push({ key: "memory", parts: ["memory idle"], text: "memory idle", tone: "muted" });
         }
     }
+    // Structured two-column StatRows for clean native sidebar alignment (Normal & Detail views).
+    const contextShortParts = known && usedText !== "--"
+        ? [pairText, ...(percent !== null ? [percentText] : [])]
+        : ["--"];
+    const contextFullParts = known && usedText !== "--"
+        ? [pairText, ...(percent !== null ? [isCapped && modelLimitText ? `${percentText} (${modelLimitText})` : percentText] : [])]
+        : ["--"];
+    const normalRows = [
+        { key: "context", label: "Context", parts: contextShortParts, value: contextShortParts.join(" | "), tone: known ? "base" : "muted" },
+        {
+            key: "activity",
+            label: comp.running || healthState === "critical" ? "Status" : comp.count > 0 ? "Compactions" : "Activity",
+            parts: activityParts,
+            value: activityParts.join(" | "),
+            tone: healthState === "critical" ? "error" : activityTone,
+        },
+    ];
+    const savedValue = liveSaved !== null && liveSaved > 0
+        ? `-${fmtChars(liveSaved)} chars`
+        : liveDrops > 0
+            ? `${fmtCount(liveDrops)} drops`
+            : dbSessVaultChars > 0
+                ? `-${fmtChars(dbSessVaultChars)} chars`
+                : dbSessVaultRefs > 0
+                    ? `${fmtCount(dbSessVaultRefs)} vault`
+                    : "0";
+    const detailRows = [
+        { key: "context", label: "Context", parts: contextFullParts, value: contextFullParts.join(" | "), tone: known ? "base" : "muted" },
+        { key: "session", label: "Session", parts: [sessionAge ?? "--"], value: sessionAge ?? "--", tone: sessionAge ? "base" : "muted" },
+        {
+            key: "compactions",
+            label: "Compactions",
+            parts: [compSummary, ...(comp.failed > 0 ? [`${fmtCount(comp.failed)} failed`] : [])],
+            value: [compSummary, ...(comp.failed > 0 ? [`${fmtCount(comp.failed)} failed`] : [])].join(" | "),
+            tone: comp.running ? "warning" : comp.failed > 0 && comp.count === 0 ? "error" : comp.count > 0 ? "base" : "muted",
+        },
+        { key: "saved", label: "Saved", parts: [savedValue], value: savedValue, tone: savedValue === "0" ? "muted" : "success" },
+    ];
+    if (effectivePolicy) {
+        detailRows.push({ key: "cache", label: "Cache", parts: [effectivePolicy], value: effectivePolicy, tone: cacheTone });
+    }
+    if (mem) {
+        if (mem.error) {
+            detailRows.push({ key: "memory", label: "Memory", parts: ["error " + mem.error], value: "error " + mem.error, tone: "error" });
+        }
+        else if (mem.enabled === true && mem.active === true) {
+            const mVals = [`${fmtCount(mem.summaries ?? 0)} sum`];
+            if (mem.vaultRefs !== null && mem.vaultRefs > 0)
+                mVals.push(`${fmtCount(mem.vaultRefs)} vault`);
+            else if (mem.dbBytes !== null)
+                mVals.push(fmtCount(mem.dbBytes).replace(/k$/, "K"));
+            detailRows.push({ key: "memory", label: "Memory", parts: mVals, value: mVals.join(" | "), tone: "base" });
+        }
+        else if (mem.enabled === true) {
+            detailRows.push({ key: "memory", label: "Memory", parts: ["idle"], value: "idle", tone: "muted" });
+        }
+    }
     return {
         hasData: snap !== null,
         context: {
@@ -778,6 +835,34 @@ export function buildSidebarModel(raw, now = Date.now(), options = {}) {
             tone: activityTone,
         },
         detailLines,
+        normalRows,
+        detailRows,
         segments: (width) => computeBarSegments(rawBreakdown, width),
     };
+}
+// Pure ASCII gain & status report for the /trim TUI slash command.
+export function buildGainReport(raw, now = Date.now(), options = {}) {
+    const snap = normalizeSnapshot(raw);
+    const model = buildSidebarModel(raw, now, options);
+    const lines = [`Trim v${TRIM_VERSION} (${model.health.label})`];
+    lines.push(`Context: ${model.context.detailParts.join(" | ")}`);
+    if (model.composition.known) {
+        lines.push(`Composition (est): sys ${model.composition.sysText} | chat ${model.composition.chatText} | tools ${model.composition.toolsText}`);
+    }
+    if (snap) {
+        const sh = snap.shell.known ? `${fmtCount(snap.shell.runs ?? 0)} runs (-${fmtChars(snap.shell.savedChars ?? 0)} chars)` : "off";
+        const fi = snap.filtering.known ? `${fmtCount(snap.filtering.runs ?? 0)} runs (-${fmtChars(snap.filtering.savedChars ?? 0)} chars)` : "off";
+        const pr = snap.pruning.known ? `${fmtCount(snap.pruning.drops ?? 0)} drops (-${fmtChars(snap.pruning.removedChars ?? 0)} chars)` : "off";
+        const total = totalSaved(snap) ?? 0;
+        const estTok = Math.round(total / 3);
+        lines.push(`Savings: -${fmtChars(total)} chars (~${fmtCount(estTok)} tokens)`);
+        lines.push(`  shell: ${sh}`);
+        lines.push(`  filter: ${fi}`);
+        lines.push(`  prune: ${pr}`);
+    }
+    for (const d of model.detailLines) {
+        lines.push(`${d.text}`);
+    }
+    lines.push("Tip: /trim minimal | normal | detail | toggle");
+    return lines.join("\n");
 }

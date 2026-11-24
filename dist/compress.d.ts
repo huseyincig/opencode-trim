@@ -37,3 +37,8 @@ export declare function compressOutput({ command, text, exitCode, options, exter
 /** Restrict non-shell tool filtering to lossless duplicate folding; do not
  * truncate distinct code/search results or structured tool payloads. */
 export declare function dedupToolOutput(text: any, options: any): CompressionResult;
+/**
+ * Losslessly compact repeated project root prefixes and group consecutive
+ * file/directory entries in grep/glob/find/ls outputs without dropping matches.
+ */
+export declare function compactListPaths(text: any, directory?: string, options?: any): CompressionResult;

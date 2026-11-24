@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.0 — 2026-11-24
+
+- **Lossless List/Search Path-Prefix & Directory Compaction (`src/compress.ts`, `src/plugin.ts`)**:
+  - Added `compactListPaths(text, directory, options)` (exported via `./core` and wired into `processToolEvent` for `grep`, `glob`, `find`, `ls`, `list`) to hoist repeated project root prefixes (`[root: ...]`) and group consecutive same-file grep matches and same-directory path listings without dropping any matches or touching structured payloads.
+- **Vault-Wide Grep Search in `trim_expand` (`src/memory-store.ts`, `src/memory.ts`)**:
+  - Added `store.searchVault()` so calling `trim_expand` without `id` and with `grep` searches across all non-expired project `vault` entries (`tool`, `target`, `regex`, `caseSensitive`, `limit`, `maxChars`, ReDoS-guarded, query-time `retentionDays` enforced) and returns matching `ref_id` + line excerpts.
+- **Opt-In, Tagless, Cache-Safe `trim_reduce` Tool (`src/config.ts`, `src/prune.ts`, `src/plugin.ts`)**:
+  - Added `reduceTool` option (`DEFAULTS.reduceTool = false`). When enabled alongside `pruning`, registers `trim_reduce` (`codemode: false`) to queue `scope: "older_tools" | "target"` reductions without message tagging (`applyNow: false` defers to cache-safe boundaries; `applyNow: true` applies on next turn), always protecting recent tails, errors, writes, and protected/instruction files while archiving dropped items to `vault`.
+- **OpenCode V2 Lifecycle Completeness (`session.deleted` & `session.hook('fork')`) (`src/plugin.ts`)**:
+  - Added `'session.deleted'` to the event subscription `types` list so deleted sessions invoke `forgetMeshSession(sid)` and `resetSessionState(sid)`.
+  - Registered `session.hook('fork')` (V2.3.0+) to keep forked child sessions free of stale cooldowns or pre-fork token baselines while enforcing `foreignEvent` isolation.
+- **Native Pill-Header TUI Sidebar Polish & `/trim` Slash Command (`src/tui.tsx`, `src/tui-model.ts`)**:
+  - Polished the borderless 3-mode sidebar with a native `[ trim ]` pill badge header + inline health status, centered 100%-filled 3-color composition bar (`34` cells in Normal/Detail, flex-centered in Minimal), and clean indented two-column `StatRow` rows matching OpenCode V2 sidebar conventions.
+  - Added pure `context.keymap.layer` `/trim` (alias `/trim-gain`) slash command displaying `buildGainReport()` savings & composition summary in `ui.dialog.alert` (with toast fallback) plus `/trim minimal | normal | detail | toggle` mode switching.
+- **Verification**: **`534 / 534`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked against `@opencode/plugin@2.4.1`, `@opentui/core@0.9.9`, and `@opentui/solid@0.9.9`.
+
 ## 0.9.4 — 2026-11-24
 
 - **Separated 100%-Filled Composition Bar & Dynamic Config-Driven TUI Sidebar (`src/tui-model.ts`, `src/tui.tsx`, `src/stats.ts`)**:

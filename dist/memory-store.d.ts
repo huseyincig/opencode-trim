@@ -1,7 +1,7 @@
 export interface VaultLookupResult {
     found: boolean;
     id: string;
-    mode?: 'item' | 'list';
+    mode?: 'item' | 'list' | 'search';
     tool?: string | null;
     target?: string | null;
     totalLines?: number;
@@ -20,6 +20,20 @@ export interface VaultRefSummary {
     totalLines: number;
     created_at: number;
     date: string;
+}
+export interface VaultSearchMatch {
+    id: string;
+    tool: string | null;
+    target: string | null;
+    line: number;
+    text: string;
+}
+export interface VaultSearchResult extends VaultLookupResult {
+    mode: 'search';
+    totalVaultRows: number;
+    matchedRefs: number;
+    matchedLines: number;
+    matches: VaultSearchMatch[];
 }
 export interface VaultListResult extends VaultLookupResult {
     mode: 'list';
@@ -94,6 +108,17 @@ export declare function openMemoryStore({ dbPath, retentionDays, maxResults, max
         limit?: number;
         now?: number;
     }): VaultListResult;
+    searchVault({ project: vaultProject, grep, regex, caseSensitive, tool, target, limit, maxChars, now }?: {
+        project?: string;
+        grep?: string;
+        regex?: boolean;
+        caseSensitive?: boolean;
+        tool?: string | null;
+        target?: string | null;
+        limit?: number;
+        maxChars?: number;
+        now?: number;
+    }): VaultSearchResult;
     getVault({ project: vaultProject, ref_id: refId, startLine, endLine, grep, regex, caseSensitive, maxChars, now }?: {
         project?: string;
         ref_id?: string;

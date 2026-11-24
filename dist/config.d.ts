@@ -20,6 +20,7 @@ export interface TrimOptions {
     readonly pruning: boolean;
     readonly compactionInputPruning: boolean;
     readonly autoCompact: boolean;
+    readonly reduceTool: boolean;
     readonly minOutputChars: number;
     readonly minSavingsRatio: number;
     readonly maxOutputLines: number;
@@ -59,6 +60,7 @@ export declare const DEFAULTS: Readonly<{
     pruning: true;
     compactionInputPruning: false;
     autoCompact: true;
+    reduceTool: false;
     minOutputChars: 1600;
     minSavingsRatio: 0.15;
     maxOutputLines: 160;

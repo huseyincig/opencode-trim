@@ -5,7 +5,7 @@ import { TRIM_STATS_RPC } from '../src/stats-rpc.ts';
 import { PRUNED } from '../src/prune.ts';
 
 const BASE = { minOutputChars: 200, maxOutputLines: 25, maxOutputChars: 2500, minSavingsRatio: 0.05, protectRecentMessages: 4, pruneAfterToolChars: 10000 };
-const EVENT_TYPES = ['session.compaction.started', 'session.compaction.ended', 'session.compaction.failed', 'session.step.ended'];
+const EVENT_TYPES = ['session.compaction.started', 'session.compaction.ended', 'session.compaction.failed', 'session.step.ended', 'session.deleted'];
 
 function harness(options = {}, { rpc = true, event = true, rpcRegister, events } = {}) {
   const log = { hooks: [], disposed: [], rpcRegistered: [], emitted: [], subscribed: [] };
@@ -57,9 +57,9 @@ test('tui disabled (default and explicit): no RPC, subscription or stats hooks; 
     h.ctx.rpc.register = () => assert.fail('rpc.register called');
     h.ctx.event.subscribe = () => assert.fail('subscribed');
     const stop = await setupTrim(h.ctx);
-    assert.deepEqual(h.log.hooks, ['tool:execute.after', 'session:context']);
+    assert.deepEqual(h.log.hooks, ['tool:execute.after', 'session:context', 'session:fork']);
     await stop(); await stop();
-    assert.deepEqual(h.log.disposed, ['session:context', 'tool:execute.after']);
+    assert.deepEqual(h.log.disposed, ['session:fork', 'session:context', 'tool:execute.after']);
   }
   const noPrune = harness({ ...BASE, pruning: false });
   const stop = await setupTrim(noPrune.ctx);

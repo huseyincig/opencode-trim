@@ -3,8 +3,8 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, normalize as normalizePath, posix as posixPath, relative as relativePath, resolve as resolvePath, win32 as win32Path } from 'node:path';
 import { parseOptions } from './config.ts';
 import { isExitNotice } from './diagnostics.ts';
-import { compressOutput, dedupToolOutput } from './compress.ts';
-import { pruneContext } from './prune.ts';
+import { compressOutput, compactListPaths, dedupToolOutput } from './compress.ts';
+import { pruneContext, type ReduceDirective } from './prune.ts';
 import { setupMemory, memoryDbBytes } from './memory.ts';
 import { createTrimStats } from './stats.ts';
 import { TRIM_STATS_RPC } from './stats-rpc.ts';
@@ -401,7 +401,12 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
       const stub=ring.check(sid,event.tool,dedupeKey,text);
       if(stub&&stub.length<text.length)return {text:stub,changed:true};
     }
-    return shell ? compressOutput({command,text,exitCode:code,options,externalFailureNotice:noticePresent}) : dedupToolOutput(text,options);
+    if(shell)return compressOutput({command,text,exitCode:code,options,externalFailureNotice:noticePresent});
+    const pathed=compactListPaths(text,dir,options);
+    const baseText=pathed.changed?pathed.text:text;
+    const deduped=dedupToolOutput(baseText,options);
+    if(deduped.changed)return {text:deduped.text,changed:true};
+    return pathed.changed?{text:pathed.text,changed:true}:{text,changed:false};
   };
   if(typeof content==='string'){
     // No separate notice part exists: the failure postconditions must apply.
@@ -482,6 +487,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   const workingState=new SessionWorkingState();
   const sessionPressure=new Map<string, number>();
   const autoCompactState=new Map<string, { inFlight: boolean; triggeredAt: number; turnsSince: number; lastMsgCount: number }>();
+  const reduceQueue=new Map<string, ReduceDirective[]>();
   // Real provider token counts (same numbers the OpenCode screen shows): input + cache.read of the latest assistant step.
   const nativeBySession=new Map<string, { id: string; tokens: number }>();
   const appliedChars=new Map<string, number>();
@@ -559,7 +565,11 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
         sessionPressure.set(sid,pressure.ratio);
       }
       const gate=cache.begin(event,opts,pressure,kind);
-      const result=pruneContext(event,opts,{pressure,...gate,...(activeVault?{vault:activeVault}:{})});
+      const pendingDirectives=sid&&kind==='context'?reduceQueue.get(sid):undefined;
+      const forceApplyNow=!!pendingDirectives?.some((d)=>d.applyNow===true);
+      const effectiveGate=forceApplyNow?{...gate,allowNewDrops:true}:gate;
+      const result=pruneContext(event,opts,{pressure,...effectiveGate,...(pendingDirectives?.length?{reduceDirectives:pendingDirectives}:{}),...(activeVault?{vault:activeVault}:{})});
+      if(sid&&result.consumedDirectives)reduceQueue.delete(sid);
       gate.finish(result.plannedIds);
       const postPressure=(kind==='context'&&result.pruned>0)?estimateRequest(event,modelLimits,opts,nativeInfo):pressure;
       if(sid&&kind==='context'){
@@ -634,6 +644,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     workingState.reset(sid);
     sessionPressure.delete(sid);
     autoCompactState.delete(sid);
+    reduceQueue.delete(sid);
     nativeBySession.delete(sid);appliedChars.delete(sid);nativeSeeded.delete(sid);
   };
   registrations.push({
@@ -672,6 +683,76 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
         // It neither asks for a summary nor sets event.result.
         registrations.push(valid(await ctx.session.hook('compaction',(event: any)=>runPruning(event,'compaction'))));
       }
+      // V2.3.0+ fork hook: keep forked sessions clean so they never inherit stale cooldowns or token baselines.
+      try{
+        const forkReg=await ctx.session.hook('fork',(event: any)=>{
+          try{
+            if(foreignEvent(event))return;
+            const childSid=sessionOf(event)??(typeof event?.data?.sessionID==='string'?event.data.sessionID:undefined);
+            if(childSid)resetSessionState(childSid);
+          }catch{/* never break fork */}
+        });
+        if(forkReg&&typeof forkReg.dispose==='function')registrations.push(forkReg);
+      }catch{/* host without fork hook support */}
+      if(opts.reduceTool&&typeof ctx?.tool?.transform==='function'){
+        registrations.push(valid(await ctx.tool.transform((editor: any)=>{
+          editor.add({
+            name:'trim_reduce',
+            description:'Queue older or targeted read-only tool outputs in the current session for cache-safe pruning. Pruned items are archived to the project vault when memory is enabled and can be restored with trim_expand. Recent turns, errors, writes, and protected files are never pruned.',
+            input:{
+              type:'object',
+              properties:{
+                scope:{type:'string',enum:['older_tools','target'],description:'"older_tools" queues eligible older tool outputs; "target" filters by target substring and/or tool name.'},
+                target:{type:'string',maxLength:256,description:'Optional case-insensitive path or command substring filter (used when scope is "target").'},
+                tool:{type:'string',maxLength:64,description:'Optional tool name filter (e.g. "read", "grep", "shell").'},
+                keepRecent:{type:'integer',minimum:1,maximum:20,description:'Minimum recent tool results to keep untouched (default 4; protectRecentMessages still applies).'},
+                applyNow:{type:'boolean',description:'If false (default), applies at the next cache-safe window; if true, applies on the very next turn.'},
+              },
+              required:['scope'],
+              additionalProperties:false,
+            },
+            output:{
+              type:'object',
+              properties:{
+                queued:{type:'boolean'},
+                mode:{type:'string'},
+                pendingDirectives:{type:'integer'},
+                text:{type:'string'},
+              },
+              required:['queued','mode','pendingDirectives','text'],
+            },
+            options:{codemode:false},
+            execute:async(input: any, context: any)=>{
+              if(context?.signal?.aborted)throw new Error('Cancelled');
+              const sid=typeof context?.sessionID==='string'&&context.sessionID?context.sessionID
+                :typeof context?.sessionId==='string'&&context.sessionId?context.sessionId
+                :typeof context?.session?.id==='string'&&context.session.id?context.session.id:'';
+              if(!sid)throw new Error('trim_reduce requires an active sessionID');
+              const scope=input?.scope;
+              if(scope!=='older_tools'&&scope!=='target')throw new Error('scope must be "older_tools" or "target"');
+              const target=input?.target!==undefined&&input?.target!==null?String(input.target).trim():undefined;
+              const tool=input?.tool!==undefined&&input?.tool!==null?String(input.tool).trim():undefined;
+              if(target&&target.length>256)throw new Error('target must be up to 256 chars');
+              if(tool&&tool.length>64)throw new Error('tool must be up to 64 chars');
+              if(scope==='target'&&!target&&!tool)throw new Error('scope "target" requires target or tool');
+              const keepRecent=input?.keepRecent!==undefined&&input?.keepRecent!==null?input.keepRecent:4;
+              if(typeof keepRecent!=='number'||!Number.isInteger(keepRecent)||keepRecent<1||keepRecent>20){
+                throw new Error('keepRecent must be an integer between 1 and 20');
+              }
+              const applyNow=input?.applyNow===true;
+              const list=reduceQueue.get(sid)??[];
+              if(list.length>=8)list.shift();
+              list.push({scope,...(target?{target}:{}),...(tool?{tool}:{}),keepRecent,applyNow});
+              reduceQueue.delete(sid);
+              if(reduceQueue.size>=128)reduceQueue.delete(reduceQueue.keys().next().value as string);
+              reduceQueue.set(sid,list);
+              const mode=applyNow?'next-turn':'cache-safe';
+              const text=`[opencode-trim: queued ${scope} reduction (${mode}; ${list.length} pending directive${list.length===1?'':'s'}). Protected files, recent messages, and errors remain untouched.]`;
+              return {content:text,output:{queued:true,mode,pendingDirectives:list.length,text}};
+            },
+          });
+        })));
+      }
     }else if(stats){
       registrations.push(valid(await ctx.session.hook('context',statsOnlyContext)));
     }
@@ -695,7 +776,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
       if(typeof ctx?.event?.subscribe==='function'){
         subscriptionAbort=new AbortController();
         const signal=subscriptionAbort.signal;
-        const subscription=await ctx.event.subscribe({signal,types:[...COMPACTION_EVENTS,'session.step.ended']});
+        const subscription=await ctx.event.subscribe({signal,types:[...COMPACTION_EVENTS,'session.step.ended','session.deleted']});
         (async()=>{
           try{
             for await(const e of subscription){
@@ -710,11 +791,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
               if(e?.type==='session.deleted'){
                 if(typeof sid==='string'&&sid){
                   forgetMeshSession(sid);
-                  cache.resetSession(sid);
-                  dedupeRing.reset(sid);
-                  workingState.reset(sid);
-                  sessionPressure.delete(sid);
-                  autoCompactState.delete(sid);
+                  resetSessionState(sid);
                 }
                 continue;
               }
@@ -727,6 +804,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
                 dedupeRing.reset(sid);
                 workingState.reset(sid);
                 sessionPressure.delete(sid);
+                reduceQueue.delete(sid);
                 nativeBySession.delete(sid);appliedChars.delete(sid);
                 const cur=autoCompactState.get(sid);
                 if(cur)cur.inFlight=false;
@@ -766,6 +844,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
           dedupeRing.reset(sid);
           workingState.reset(sid);
           sessionPressure.delete(sid);
+          reduceQueue.delete(sid);
           nativeBySession.delete(sid);appliedChars.delete(sid);
           const cur=autoCompactState.get(sid);
           if(cur)cur.inFlight=false;
@@ -779,7 +858,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   }
   return async()=>{
     if(disposed)return;
-    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();nativeBySession.clear();appliedChars.clear();nativeSeeded.clear();modelLimits.clear();activeVault=null;
+    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();reduceQueue.clear();nativeBySession.clear();appliedChars.clear();nativeSeeded.clear();modelLimits.clear();activeVault=null;
     if(memoryStop)await Promise.resolve().then(memoryStop).catch(()=>{});
     await Promise.allSettled(registrations.reverse().map(reg=>reg.dispose()));
     await dispose();

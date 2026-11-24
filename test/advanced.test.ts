@@ -92,7 +92,7 @@ test('packaged plugin defaults avoid any compaction summary operation',async()=>
  const installed=[];const callbacks={};
  const ctx={options,model:{list:async()=>({data:[]})},tool:{hook:async(n,cb)=>{callbacks[n]=cb;installed.push(n);return{dispose:async()=>{}}}},session:{hook:async(n,cb)=>{callbacks[n]=cb;installed.push(n);return{dispose:async()=>{}}}}};
  const dispose=await plugin.setup(ctx);
- assert.deepEqual(installed,['execute.after','context']);
+ assert.deepEqual(installed,['execute.after','context','fork']);
  assert.equal('compaction' in callbacks,false);
  await dispose();
 });
@@ -102,7 +102,7 @@ test('explicit compaction-input mode only prunes tool results; never synthesizes
  model:{list:async()=>({data:[]})}, tool:{hook:async(n,fn)=>{callbacks[n]=fn;return{dispose:async()=>registrations.push(n)}}},session:{hook:async(n,fn)=>{callbacks[n]=fn;return{dispose:async()=>registrations.push(n)}}}};
  const stop=await plugin.setup(ctx);const e=history();await callbacks.compaction(e);
  assert.equal(e.result,undefined);assert.ok(e.messages.some((m)=>m.content.some((p)=>p?.result?.value===PRUNED)));
- await stop();assert.deepEqual(registrations,['compaction','context','execute.after']);
+ await stop();assert.deepEqual(registrations,['fork','compaction','context','execute.after']);
 });
 test('no compression when failure signals would be lost',()=>{
  const opt=parseOptions({minOutputChars:200,maxOutputLines:20,maxOutputChars:2000,minSavingsRatio:0});

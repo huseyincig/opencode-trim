@@ -1,8 +1,8 @@
 import { memo as _$memo } from "@opentui/solid";
 import { createTextNode as _$createTextNode } from "@opentui/solid";
-import { insertNode as _$insertNode } from "@opentui/solid";
 import { createComponent as _$createComponent } from "@opentui/solid";
 import { effect as _$effect } from "@opentui/solid";
+import { insertNode as _$insertNode } from "@opentui/solid";
 import { insert as _$insert } from "@opentui/solid";
 import { setProp as _$setProp } from "@opentui/solid";
 import { createElement as _$createElement } from "@opentui/solid";
@@ -12,12 +12,12 @@ import { createElement as _$createElement } from "@opentui/solid";
 import { Plugin } from "@opencode/plugin/tui";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { TRIM_STATS_RPC } from "./stats-rpc.js";
-import { buildHeader, buildSidebarModel, compactionBreakdown, compactionHistory, isStale, messageBreakdown, nativeContextTokens, nextViewMode, normalizeEventSessionID, normalizeViewMode, STORAGE_KEY, TRIM_VERSION } from "./tui-model.js";
+import { buildGainReport, buildHeader, buildSidebarModel, compactionBreakdown, compactionHistory, isStale, messageBreakdown, nativeContextTokens, nextViewMode, normalizeEventSessionID, normalizeViewMode, STORAGE_KEY, TRIM_VERSION } from "./tui-model.js";
 const DEBOUNCE_MS = 150;
 const POLL_MS = 2000;
 const MAX_HIDDEN_RETRIES = 3;
-const COLLAPSED_BAR_WIDTH = 18;
-const EXPANDED_BAR_WIDTH = 32;
+const COLLAPSED_BAR_WIDTH = 14;
+const EXPANDED_BAR_WIDTH = 34;
 const REFRESH_EVENTS = ["session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.step.ended"];
 const RELOAD_EVENTS = ["plugin.updated", "model.updated", "provider.updated"];
 function normDir(v) {
@@ -29,61 +29,93 @@ function isRpcUnavailable(err) {
   const msg = String(err?.message ?? err?.code ?? err ?? "").toLowerCase();
   return msg.includes("rpc.unavailable") || msg.includes("unavailable") || msg.includes("404") || msg.includes("not found");
 }
+function StatRow(props) {
+  return (() => {
+    var _el$ = _$createElement("box"),
+      _el$2 = _$createElement("text"),
+      _el$3 = _$createElement("text"),
+      _el$4 = _$createElement("b");
+    _$insertNode(_el$, _el$2);
+    _$insertNode(_el$, _el$3);
+    _$setProp(_el$, "width", "100%");
+    _$setProp(_el$, "flexDirection", "row");
+    _$setProp(_el$, "justifyContent", "space-between");
+    _$setProp(_el$2, "flexShrink", 0);
+    _$setProp(_el$2, "wrapMode", "none");
+    _$insert(_el$2, () => props.label);
+    _$insertNode(_el$3, _el$4);
+    _$setProp(_el$3, "flexShrink", 1);
+    _$setProp(_el$3, "marginLeft", 1);
+    _$setProp(_el$3, "wrapMode", "none");
+    _$insert(_el$4, () => props.value);
+    _$effect(_p$ => {
+      var _v$ = props.labelColor,
+        _v$2 = props.valueColor;
+      _v$ !== _p$.e && (_p$.e = _$setProp(_el$2, "fg", _v$, _p$.e));
+      _v$2 !== _p$.t && (_p$.t = _$setProp(_el$3, "fg", _v$2, _p$.t));
+      return _p$;
+    }, {
+      e: undefined,
+      t: undefined
+    });
+    return _el$;
+  })();
+}
 function SegmentedBar(props) {
   const s = () => props.segments;
   return (() => {
-    var _el$ = _$createElement("box");
-    _$setProp(_el$, "flexDirection", "row");
-    _$setProp(_el$, "flexShrink", 1);
-    _$insert(_el$, _$createComponent(Show, {
+    var _el$5 = _$createElement("box");
+    _$setProp(_el$5, "flexDirection", "row");
+    _$setProp(_el$5, "flexShrink", 1);
+    _$insert(_el$5, _$createComponent(Show, {
       get when() {
         return s().sys > 0;
       },
       get children() {
-        var _el$2 = _$createElement("text");
-        _$setProp(_el$2, "wrapMode", "none");
-        _$insert(_el$2, () => "█".repeat(s().sys));
-        _$effect(_$p => _$setProp(_el$2, "fg", props.sysColor, _$p));
-        return _el$2;
+        var _el$6 = _$createElement("text");
+        _$setProp(_el$6, "wrapMode", "none");
+        _$insert(_el$6, () => "█".repeat(s().sys));
+        _$effect(_$p => _$setProp(_el$6, "fg", props.sysColor, _$p));
+        return _el$6;
       }
     }), null);
-    _$insert(_el$, _$createComponent(Show, {
+    _$insert(_el$5, _$createComponent(Show, {
       get when() {
         return s().chat > 0;
       },
       get children() {
-        var _el$3 = _$createElement("text");
-        _$setProp(_el$3, "wrapMode", "none");
-        _$insert(_el$3, () => "█".repeat(s().chat));
-        _$effect(_$p => _$setProp(_el$3, "fg", props.chatColor, _$p));
-        return _el$3;
+        var _el$7 = _$createElement("text");
+        _$setProp(_el$7, "wrapMode", "none");
+        _$insert(_el$7, () => "█".repeat(s().chat));
+        _$effect(_$p => _$setProp(_el$7, "fg", props.chatColor, _$p));
+        return _el$7;
       }
     }), null);
-    _$insert(_el$, _$createComponent(Show, {
+    _$insert(_el$5, _$createComponent(Show, {
       get when() {
         return s().tools > 0;
       },
       get children() {
-        var _el$4 = _$createElement("text");
-        _$setProp(_el$4, "wrapMode", "none");
-        _$insert(_el$4, () => "█".repeat(s().tools));
-        _$effect(_$p => _$setProp(_el$4, "fg", props.toolsColor, _$p));
-        return _el$4;
+        var _el$8 = _$createElement("text");
+        _$setProp(_el$8, "wrapMode", "none");
+        _$insert(_el$8, () => "█".repeat(s().tools));
+        _$effect(_$p => _$setProp(_el$8, "fg", props.toolsColor, _$p));
+        return _el$8;
       }
     }), null);
-    _$insert(_el$, _$createComponent(Show, {
+    _$insert(_el$5, _$createComponent(Show, {
       get when() {
         return s().empty > 0;
       },
       get children() {
-        var _el$5 = _$createElement("text");
-        _$setProp(_el$5, "wrapMode", "none");
-        _$insert(_el$5, () => "█".repeat(s().empty));
-        _$effect(_$p => _$setProp(_el$5, "fg", props.emptyColor, _$p));
-        return _el$5;
+        var _el$9 = _$createElement("text");
+        _$setProp(_el$9, "wrapMode", "none");
+        _$insert(_el$9, () => "█".repeat(s().empty));
+        _$effect(_$p => _$setProp(_el$9, "fg", props.emptyColor, _$p));
+        return _el$9;
       }
     }), null);
-    return _el$;
+    return _el$5;
   })();
 }
 export default Plugin.define({
@@ -120,20 +152,31 @@ export default Plugin.define({
       return false;
     };
     const viewMode = () => normalizeViewMode(stored);
-    const toggle = () => {
+    const setViewMode = mode => {
       try {
         void Promise.resolve(updateStored(draft => {
-          const next = nextViewMode(normalizeViewMode(draft));
-          draft.mode = next;
-          draft.expanded = next === "expanded";
+          draft.mode = mode;
+          draft.expanded = mode === "expanded";
         })).catch(() => {});
       } catch {}
+    };
+    const toggle = () => setViewMode(nextViewMode(viewMode()));
+    let activeSessionID;
+    let latestState = {
+      snapshot: null,
+      nativeTokens: null,
+      nativeLimit: null,
+      sessionCreatedAt: null,
+      history: null,
+      compDetails: null,
+      msgBreakdown: null
     };
     const theme = context.theme;
     const base = () => theme?.text?.base ?? "white";
     const muted = () => theme?.text?.muted ?? base();
+    const bgColor = () => theme?.background?.base ?? theme?.background?.panel ?? "#111318";
     const faint = () => theme?.text?.faint ?? "#3f434a";
-    const sysColor = () => theme?.syntax?.keyword ?? theme?.text?.accent?.base ?? "#a875ff";
+    const sysColor = () => theme?.syntax?.keyword ?? theme?.brand?.primary?.base ?? theme?.text?.accent?.base ?? "#a875ff";
     const chatColor = () => theme?.syntax?.function ?? theme?.status?.info?.base ?? "#38bdf8";
     const okColor = () => theme?.status?.success?.base ?? "#4ade80";
     const warnColor = () => theme?.status?.warning?.base ?? "#facc15";
@@ -154,6 +197,7 @@ export default Plugin.define({
       const [now, setNow] = createSignal(Date.now());
       const running = () => !!props.sessionID && context.data?.session?.status?.(props.sessionID) === "running";
       createEffect(on(() => props.sessionID, sessionID => {
+        activeSessionID = sessionID;
         setSnapshot(null);
         setFailed(false);
         setNativeTokens(null);
@@ -211,6 +255,7 @@ export default Plugin.define({
             } : undefined);
             if (disposed || mine !== seq) return;
             setSnapshot(next ?? null);
+            latestState.snapshot = next ?? null;
             setFailed(next == null);
             if (next != null) {
               setVisible(true);
@@ -252,6 +297,10 @@ export default Plugin.define({
                 setHistory(compactionHistory(list));
                 setCompDetails(compactionBreakdown(list));
                 setMsgBreakdown(messageBreakdown(list));
+                latestState.nativeTokens = tokens;
+                latestState.history = compactionHistory(list);
+                latestState.compDetails = compactionBreakdown(list);
+                latestState.msgBreakdown = messageBreakdown(list);
               }
             }
           } catch {
@@ -267,6 +316,8 @@ export default Plugin.define({
             if (!disposed && mine === seq) {
               setNativeLimit(meta.limit);
               setSessionCreatedAt(meta.createdAt);
+              latestState.nativeLimit = meta.limit;
+              latestState.sessionCreatedAt = meta.createdAt;
             }
           } catch {
             if (!disposed && mine === seq) {
@@ -356,50 +407,54 @@ export default Plugin.define({
           return visible();
         },
         get children() {
-          var _el$6 = _$createElement("box");
-          _$setProp(_el$6, "flexDirection", "column");
-          _$setProp(_el$6, "flexShrink", 0);
-          _$setProp(_el$6, "width", "100%");
-          _$setProp(_el$6, "gap", 0);
-          _$insert(_el$6, _$createComponent(Show, {
+          var _el$0 = _$createElement("box");
+          _$setProp(_el$0, "flexDirection", "column");
+          _$setProp(_el$0, "flexShrink", 0);
+          _$setProp(_el$0, "width", "100%");
+          _$setProp(_el$0, "gap", 0);
+          _$insert(_el$0, _$createComponent(Show, {
             get when() {
               return viewMode() !== "collapsed";
             },
             get fallback() {
               return (() => {
-                var _el$38 = _$createElement("box"),
-                  _el$39 = _$createElement("box"),
-                  _el$40 = _$createElement("text"),
+                var _el$37 = _$createElement("box"),
+                  _el$38 = _$createElement("box"),
+                  _el$39 = _$createElement("text"),
+                  _el$41 = _$createElement("box"),
                   _el$42 = _$createElement("text"),
-                  _el$43 = _$createElement("b"),
+                  _el$44 = _$createElement("box"),
                   _el$45 = _$createElement("box"),
-                  _el$46 = _$createElement("box"),
-                  _el$47 = _$createElement("text"),
-                  _el$48 = _$createElement("b");
+                  _el$46 = _$createElement("text"),
+                  _el$47 = _$createElement("b");
+                _$insertNode(_el$37, _el$38);
+                _$insertNode(_el$37, _el$44);
+                _$insertNode(_el$37, _el$45);
+                _$setProp(_el$37, "width", "100%");
+                _$setProp(_el$37, "flexDirection", "row");
+                _$setProp(_el$37, "justifyContent", "space-between");
+                _$setProp(_el$37, "alignItems", "center");
+                _$setProp(_el$37, "flexShrink", 0);
+                _$setProp(_el$37, "onMouseUp", toggle);
                 _$insertNode(_el$38, _el$39);
-                _$insertNode(_el$38, _el$45);
-                _$insertNode(_el$38, _el$46);
-                _$setProp(_el$38, "width", "100%");
+                _$insertNode(_el$38, _el$41);
                 _$setProp(_el$38, "flexDirection", "row");
-                _$setProp(_el$38, "justifyContent", "space-between");
                 _$setProp(_el$38, "alignItems", "center");
                 _$setProp(_el$38, "flexShrink", 0);
-                _$setProp(_el$38, "onMouseUp", toggle);
-                _$insertNode(_el$39, _el$40);
-                _$insertNode(_el$39, _el$42);
-                _$setProp(_el$39, "flexDirection", "row");
-                _$setProp(_el$39, "alignItems", "center");
-                _$setProp(_el$39, "flexShrink", 0);
-                _$insertNode(_el$40, _$createTextNode(`▶ `));
-                _$setProp(_el$40, "wrapMode", "none");
-                _$insertNode(_el$42, _el$43);
+                _$insertNode(_el$39, _$createTextNode(`▶ `));
+                _$setProp(_el$39, "wrapMode", "none");
+                _$insertNode(_el$41, _el$42);
+                _$setProp(_el$41, "paddingLeft", 1);
+                _$setProp(_el$41, "paddingRight", 1);
+                _$insertNode(_el$42, _$createTextNode(`trim`));
                 _$setProp(_el$42, "wrapMode", "none");
-                _$insertNode(_el$43, _$createTextNode(`Trim`));
-                _$setProp(_el$45, "flexDirection", "row");
-                _$setProp(_el$45, "alignItems", "center");
-                _$setProp(_el$45, "flexShrink", 1);
-                _$setProp(_el$45, "marginLeft", 1);
-                _$insert(_el$45, _$createComponent(SegmentedBar, {
+                _$setProp(_el$44, "flexGrow", 1);
+                _$setProp(_el$44, "flexDirection", "row");
+                _$setProp(_el$44, "justifyContent", "center");
+                _$setProp(_el$44, "alignItems", "center");
+                _$setProp(_el$44, "marginLeft", 1);
+                _$setProp(_el$44, "marginRight", 1);
+                _$insert(_el$44, _$createComponent(SegmentedBar, {
                   get segments() {
                     return collapsedSegments();
                   },
@@ -416,106 +471,135 @@ export default Plugin.define({
                     return faint();
                   }
                 }));
+                _$insertNode(_el$45, _el$46);
+                _$setProp(_el$45, "flexDirection", "row");
+                _$setProp(_el$45, "alignItems", "center");
+                _$setProp(_el$45, "flexShrink", 0);
                 _$insertNode(_el$46, _el$47);
-                _$setProp(_el$46, "flexDirection", "row");
-                _$setProp(_el$46, "alignItems", "center");
-                _$setProp(_el$46, "flexShrink", 0);
-                _$setProp(_el$46, "marginLeft", 1);
-                _$insertNode(_el$47, _el$48);
-                _$setProp(_el$47, "wrapMode", "none");
-                _$insert(_el$48, () => model().context.percentText);
-                _$insert(_el$46, _$createComponent(Show, {
+                _$setProp(_el$46, "wrapMode", "none");
+                _$insert(_el$47, () => model().context.percentText);
+                _$insert(_el$45, _$createComponent(Show, {
                   get when() {
                     return header().marker;
                   },
                   get children() {
-                    var _el$49 = _$createElement("text");
-                    _$setProp(_el$49, "wrapMode", "none");
-                    _$insert(_el$49, () => " " + header().marker);
-                    _$effect(_$p => _$setProp(_el$49, "fg", tone("warning"), _$p));
-                    return _el$49;
+                    var _el$48 = _$createElement("text");
+                    _$setProp(_el$48, "wrapMode", "none");
+                    _$insert(_el$48, () => " " + header().marker);
+                    _$effect(_$p => _$setProp(_el$48, "fg", tone("warning"), _$p));
+                    return _el$48;
                   }
                 }), null);
                 _$effect(_p$ => {
-                  var _v$10 = muted(),
-                    _v$11 = base(),
-                    _v$12 = tone(model().health.tone);
-                  _v$10 !== _p$.e && (_p$.e = _$setProp(_el$40, "fg", _v$10, _p$.e));
-                  _v$11 !== _p$.t && (_p$.t = _$setProp(_el$42, "fg", _v$11, _p$.t));
-                  _v$12 !== _p$.a && (_p$.a = _$setProp(_el$47, "fg", _v$12, _p$.a));
+                  var _v$12 = muted(),
+                    _v$13 = sysColor(),
+                    _v$14 = bgColor(),
+                    _v$15 = tone(model().health.tone);
+                  _v$12 !== _p$.e && (_p$.e = _$setProp(_el$39, "fg", _v$12, _p$.e));
+                  _v$13 !== _p$.t && (_p$.t = _$setProp(_el$41, "backgroundColor", _v$13, _p$.t));
+                  _v$14 !== _p$.a && (_p$.a = _$setProp(_el$42, "fg", _v$14, _p$.a));
+                  _v$15 !== _p$.o && (_p$.o = _$setProp(_el$46, "fg", _v$15, _p$.o));
                   return _p$;
                 }, {
                   e: undefined,
                   t: undefined,
-                  a: undefined
+                  a: undefined,
+                  o: undefined
                 });
-                return _el$38;
+                return _el$37;
               })();
             },
             get children() {
               return [(() => {
-                var _el$7 = _$createElement("box"),
-                  _el$8 = _$createElement("box"),
-                  _el$9 = _$createElement("text"),
-                  _el$1 = _$createElement("text"),
-                  _el$10 = _$createElement("b"),
+                var _el$1 = _$createElement("box"),
+                  _el$10 = _$createElement("text"),
                   _el$12 = _$createElement("box"),
-                  _el$13 = _$createElement("text");
-                _$insertNode(_el$7, _el$8);
-                _$insertNode(_el$7, _el$12);
-                _$setProp(_el$7, "width", "100%");
-                _$setProp(_el$7, "flexDirection", "row");
-                _$setProp(_el$7, "justifyContent", "space-between");
-                _$setProp(_el$7, "alignItems", "center");
-                _$setProp(_el$7, "flexShrink", 0);
-                _$setProp(_el$7, "onMouseUp", toggle);
-                _$insertNode(_el$8, _el$9);
-                _$insertNode(_el$8, _el$1);
-                _$setProp(_el$8, "flexDirection", "row");
-                _$setProp(_el$8, "alignItems", "center");
-                _$insertNode(_el$9, _$createTextNode(`▼ `));
-                _$setProp(_el$9, "wrapMode", "none");
+                  _el$13 = _$createElement("text"),
+                  _el$15 = _$createElement("text"),
+                  _el$16 = _$createElement("text");
                 _$insertNode(_el$1, _el$10);
-                _$setProp(_el$1, "wrapMode", "none");
-                _$insertNode(_el$10, _$createTextNode(`Trim`));
+                _$insertNode(_el$1, _el$12);
+                _$insertNode(_el$1, _el$15);
+                _$insertNode(_el$1, _el$16);
+                _$setProp(_el$1, "width", "100%");
+                _$setProp(_el$1, "flexDirection", "row");
+                _$setProp(_el$1, "alignItems", "center");
+                _$setProp(_el$1, "flexShrink", 0);
+                _$setProp(_el$1, "onMouseUp", toggle);
+                _$insertNode(_el$10, _$createTextNode(`▼ `));
+                _$setProp(_el$10, "wrapMode", "none");
                 _$insertNode(_el$12, _el$13);
-                _$setProp(_el$12, "flexDirection", "row");
-                _$setProp(_el$12, "alignItems", "center");
+                _$setProp(_el$12, "paddingLeft", 1);
+                _$setProp(_el$12, "paddingRight", 1);
+                _$insertNode(_el$13, _$createTextNode(`trim`));
                 _$setProp(_el$13, "wrapMode", "none");
-                _$insert(_el$13, "v" + TRIM_VERSION);
-                _$insert(_el$12, _$createComponent(Show, {
+                _$setProp(_el$15, "wrapMode", "none");
+                _$insert(_el$15, " v" + TRIM_VERSION);
+                _$setProp(_el$16, "flexShrink", 1);
+                _$setProp(_el$16, "wrapMode", "none");
+                _$insert(_el$16, () => " · ● " + model().health.label);
+                _$insert(_el$1, _$createComponent(Show, {
                   get when() {
                     return header().marker;
                   },
                   get children() {
-                    var _el$14 = _$createElement("text");
-                    _$setProp(_el$14, "wrapMode", "none");
-                    _$insert(_el$14, () => " " + header().marker);
-                    _$effect(_$p => _$setProp(_el$14, "fg", tone("warning"), _$p));
-                    return _el$14;
+                    var _el$17 = _$createElement("text");
+                    _$setProp(_el$17, "flexShrink", 0);
+                    _$setProp(_el$17, "wrapMode", "none");
+                    _$insert(_el$17, () => " " + header().marker);
+                    _$effect(_$p => _$setProp(_el$17, "fg", tone("warning"), _$p));
+                    return _el$17;
                   }
                 }), null);
                 _$effect(_p$ => {
-                  var _v$ = muted(),
-                    _v$2 = base(),
-                    _v$3 = muted();
-                  _v$ !== _p$.e && (_p$.e = _$setProp(_el$9, "fg", _v$, _p$.e));
-                  _v$2 !== _p$.t && (_p$.t = _$setProp(_el$1, "fg", _v$2, _p$.t));
-                  _v$3 !== _p$.a && (_p$.a = _$setProp(_el$13, "fg", _v$3, _p$.a));
+                  var _v$3 = muted(),
+                    _v$4 = sysColor(),
+                    _v$5 = bgColor(),
+                    _v$6 = muted(),
+                    _v$7 = tone(model().health.tone);
+                  _v$3 !== _p$.e && (_p$.e = _$setProp(_el$10, "fg", _v$3, _p$.e));
+                  _v$4 !== _p$.t && (_p$.t = _$setProp(_el$12, "backgroundColor", _v$4, _p$.t));
+                  _v$5 !== _p$.a && (_p$.a = _$setProp(_el$13, "fg", _v$5, _p$.a));
+                  _v$6 !== _p$.o && (_p$.o = _$setProp(_el$15, "fg", _v$6, _p$.o));
+                  _v$7 !== _p$.i && (_p$.i = _$setProp(_el$16, "fg", _v$7, _p$.i));
                   return _p$;
                 }, {
                   e: undefined,
                   t: undefined,
-                  a: undefined
+                  a: undefined,
+                  o: undefined,
+                  i: undefined
                 });
-                return _el$7;
+                return _el$1;
               })(), (() => {
-                var _el$15 = _$createElement("box");
-                _$setProp(_el$15, "width", "100%");
-                _$setProp(_el$15, "flexDirection", "row");
-                _$setProp(_el$15, "alignItems", "center");
-                _$setProp(_el$15, "flexShrink", 0);
-                _$insert(_el$15, _$createComponent(SegmentedBar, {
+                var _el$18 = _$createElement("box"),
+                  _el$19 = _$createElement("box"),
+                  _el$20 = _$createElement("box"),
+                  _el$21 = _$createElement("box"),
+                  _el$22 = _$createElement("text"),
+                  _el$24 = _$createElement("text"),
+                  _el$25 = _$createElement("b"),
+                  _el$26 = _$createElement("box"),
+                  _el$27 = _$createElement("text"),
+                  _el$29 = _$createElement("text"),
+                  _el$30 = _$createElement("b"),
+                  _el$31 = _$createElement("box"),
+                  _el$32 = _$createElement("text"),
+                  _el$34 = _$createElement("text"),
+                  _el$35 = _$createElement("b");
+                _$insertNode(_el$18, _el$19);
+                _$insertNode(_el$18, _el$20);
+                _$setProp(_el$18, "width", "100%");
+                _$setProp(_el$18, "flexDirection", "column");
+                _$setProp(_el$18, "paddingLeft", 1);
+                _$setProp(_el$18, "paddingRight", 1);
+                _$setProp(_el$18, "gap", 0);
+                _$setProp(_el$19, "width", "100%");
+                _$setProp(_el$19, "flexDirection", "row");
+                _$setProp(_el$19, "justifyContent", "center");
+                _$setProp(_el$19, "alignItems", "center");
+                _$setProp(_el$19, "flexShrink", 0);
+                _$insert(_el$19, _$createComponent(SegmentedBar, {
                   get segments() {
                     return expandedSegments();
                   },
@@ -532,66 +616,122 @@ export default Plugin.define({
                     return faint();
                   }
                 }));
-                return _el$15;
-              })(), (() => {
-                var _el$16 = _$createElement("box"),
-                  _el$17 = _$createElement("box"),
-                  _el$18 = _$createElement("text"),
-                  _el$20 = _$createElement("text"),
-                  _el$21 = _$createElement("box"),
-                  _el$22 = _$createElement("text"),
-                  _el$24 = _$createElement("text"),
-                  _el$25 = _$createElement("box"),
-                  _el$26 = _$createElement("text"),
-                  _el$28 = _$createElement("text");
-                _$insertNode(_el$16, _el$17);
-                _$insertNode(_el$16, _el$21);
-                _$insertNode(_el$16, _el$25);
-                _$setProp(_el$16, "width", "100%");
-                _$setProp(_el$16, "flexDirection", "row");
-                _$setProp(_el$16, "justifyContent", "space-between");
-                _$setProp(_el$16, "alignItems", "center");
-                _$setProp(_el$16, "flexShrink", 0);
-                _$insertNode(_el$17, _el$18);
-                _$insertNode(_el$17, _el$20);
-                _$setProp(_el$17, "flexDirection", "row");
-                _$setProp(_el$17, "alignItems", "center");
-                _$setProp(_el$17, "flexShrink", 0);
-                _$insertNode(_el$18, _$createTextNode(`sys `));
-                _$setProp(_el$18, "wrapMode", "none");
-                _$setProp(_el$20, "wrapMode", "none");
-                _$insert(_el$20, () => model().composition.sysText);
+                _$insertNode(_el$20, _el$21);
+                _$insertNode(_el$20, _el$26);
+                _$insertNode(_el$20, _el$31);
+                _$setProp(_el$20, "width", "100%");
+                _$setProp(_el$20, "flexDirection", "row");
+                _$setProp(_el$20, "justifyContent", "space-between");
+                _$setProp(_el$20, "alignItems", "center");
+                _$setProp(_el$20, "flexShrink", 0);
                 _$insertNode(_el$21, _el$22);
                 _$insertNode(_el$21, _el$24);
                 _$setProp(_el$21, "flexDirection", "row");
                 _$setProp(_el$21, "alignItems", "center");
                 _$setProp(_el$21, "flexShrink", 0);
-                _$insertNode(_el$22, _$createTextNode(`chat `));
+                _$insertNode(_el$22, _$createTextNode(`sys `));
                 _$setProp(_el$22, "wrapMode", "none");
+                _$insertNode(_el$24, _el$25);
                 _$setProp(_el$24, "wrapMode", "none");
-                _$insert(_el$24, () => model().composition.chatText);
-                _$insertNode(_el$25, _el$26);
-                _$insertNode(_el$25, _el$28);
-                _$setProp(_el$25, "flexDirection", "row");
-                _$setProp(_el$25, "alignItems", "center");
-                _$setProp(_el$25, "flexShrink", 0);
-                _$insertNode(_el$26, _$createTextNode(`tools `));
-                _$setProp(_el$26, "wrapMode", "none");
-                _$setProp(_el$28, "wrapMode", "none");
-                _$insert(_el$28, () => model().composition.toolsText);
+                _$insert(_el$25, () => model().composition.sysText);
+                _$insertNode(_el$26, _el$27);
+                _$insertNode(_el$26, _el$29);
+                _$setProp(_el$26, "flexDirection", "row");
+                _$setProp(_el$26, "alignItems", "center");
+                _$setProp(_el$26, "flexShrink", 0);
+                _$insertNode(_el$27, _$createTextNode(`chat `));
+                _$setProp(_el$27, "wrapMode", "none");
+                _$insertNode(_el$29, _el$30);
+                _$setProp(_el$29, "wrapMode", "none");
+                _$insert(_el$30, () => model().composition.chatText);
+                _$insertNode(_el$31, _el$32);
+                _$insertNode(_el$31, _el$34);
+                _$setProp(_el$31, "flexDirection", "row");
+                _$setProp(_el$31, "alignItems", "center");
+                _$setProp(_el$31, "flexShrink", 0);
+                _$insertNode(_el$32, _$createTextNode(`tools `));
+                _$setProp(_el$32, "wrapMode", "none");
+                _$insertNode(_el$34, _el$35);
+                _$setProp(_el$34, "wrapMode", "none");
+                _$insert(_el$35, () => model().composition.toolsText);
+                _$insert(_el$18, _$createComponent(Show, {
+                  get when() {
+                    return viewMode() === "default";
+                  },
+                  get children() {
+                    return _$createComponent(For, {
+                      get each() {
+                        return model().normalRows;
+                      },
+                      children: row => _$createComponent(StatRow, {
+                        get label() {
+                          return row.label;
+                        },
+                        get value() {
+                          return row.parts.join(" · ");
+                        },
+                        get labelColor() {
+                          return muted();
+                        },
+                        get valueColor() {
+                          return tone(row.tone);
+                        }
+                      })
+                    });
+                  }
+                }), null);
+                _$insert(_el$18, _$createComponent(Show, {
+                  get when() {
+                    return viewMode() === "expanded";
+                  },
+                  get children() {
+                    return _$createComponent(For, {
+                      get each() {
+                        return model().detailRows;
+                      },
+                      children: row => _$createComponent(StatRow, {
+                        get label() {
+                          return row.label;
+                        },
+                        get value() {
+                          return row.parts.join(" · ");
+                        },
+                        get labelColor() {
+                          return muted();
+                        },
+                        get valueColor() {
+                          return tone(row.tone);
+                        }
+                      })
+                    });
+                  }
+                }), null);
+                _$insert(_el$18, _$createComponent(Show, {
+                  get when() {
+                    return stale();
+                  },
+                  get children() {
+                    var _el$36 = _$createElement("text");
+                    _$setProp(_el$36, "flexShrink", 1);
+                    _$setProp(_el$36, "wrapMode", "none");
+                    _$insert(_el$36, () => failed() ? "stats unavailable" : "stats stale");
+                    _$effect(_$p => _$setProp(_el$36, "fg", theme?.text?.faint ?? muted(), _$p));
+                    return _el$36;
+                  }
+                }), null);
                 _$effect(_p$ => {
-                  var _v$4 = sysColor(),
-                    _v$5 = base(),
-                    _v$6 = chatColor(),
-                    _v$7 = base(),
-                    _v$8 = okColor(),
-                    _v$9 = base();
-                  _v$4 !== _p$.e && (_p$.e = _$setProp(_el$18, "fg", _v$4, _p$.e));
-                  _v$5 !== _p$.t && (_p$.t = _$setProp(_el$20, "fg", _v$5, _p$.t));
-                  _v$6 !== _p$.a && (_p$.a = _$setProp(_el$22, "fg", _v$6, _p$.a));
-                  _v$7 !== _p$.o && (_p$.o = _$setProp(_el$24, "fg", _v$7, _p$.o));
-                  _v$8 !== _p$.i && (_p$.i = _$setProp(_el$26, "fg", _v$8, _p$.i));
-                  _v$9 !== _p$.n && (_p$.n = _$setProp(_el$28, "fg", _v$9, _p$.n));
+                  var _v$8 = sysColor(),
+                    _v$9 = base(),
+                    _v$0 = chatColor(),
+                    _v$1 = base(),
+                    _v$10 = okColor(),
+                    _v$11 = base();
+                  _v$8 !== _p$.e && (_p$.e = _$setProp(_el$22, "fg", _v$8, _p$.e));
+                  _v$9 !== _p$.t && (_p$.t = _$setProp(_el$24, "fg", _v$9, _p$.t));
+                  _v$0 !== _p$.a && (_p$.a = _$setProp(_el$27, "fg", _v$0, _p$.a));
+                  _v$1 !== _p$.o && (_p$.o = _$setProp(_el$29, "fg", _v$1, _p$.o));
+                  _v$10 !== _p$.i && (_p$.i = _$setProp(_el$32, "fg", _v$10, _p$.i));
+                  _v$11 !== _p$.n && (_p$.n = _$setProp(_el$34, "fg", _v$11, _p$.n));
                   return _p$;
                 }, {
                   e: undefined,
@@ -601,139 +741,82 @@ export default Plugin.define({
                   i: undefined,
                   n: undefined
                 });
-                return _el$16;
-              })(), _$createComponent(Show, {
-                get when() {
-                  return viewMode() === "default";
-                },
-                get children() {
-                  return [(() => {
-                    var _el$29 = _$createElement("box"),
-                      _el$30 = _$createElement("text"),
-                      _el$31 = _$createElement("text"),
-                      _el$32 = _$createElement("b");
-                    _$insertNode(_el$29, _el$30);
-                    _$insertNode(_el$29, _el$31);
-                    _$setProp(_el$29, "width", "100%");
-                    _$setProp(_el$29, "flexDirection", "row");
-                    _$setProp(_el$29, "alignItems", "center");
-                    _$setProp(_el$29, "flexShrink", 0);
-                    _$setProp(_el$30, "flexShrink", 1);
-                    _$setProp(_el$30, "wrapMode", "none");
-                    _$insert(_el$30, () => model().context.parts.join(" · "));
-                    _$insertNode(_el$31, _el$32);
-                    _$setProp(_el$31, "flexShrink", 0);
-                    _$setProp(_el$31, "marginLeft", 2);
-                    _$setProp(_el$31, "wrapMode", "none");
-                    _$insert(_el$32, () => "● " + model().health.label);
-                    _$effect(_p$ => {
-                      var _v$0 = muted(),
-                        _v$1 = tone(model().health.tone);
-                      _v$0 !== _p$.e && (_p$.e = _$setProp(_el$30, "fg", _v$0, _p$.e));
-                      _v$1 !== _p$.t && (_p$.t = _$setProp(_el$31, "fg", _v$1, _p$.t));
-                      return _p$;
-                    }, {
-                      e: undefined,
-                      t: undefined
-                    });
-                    return _el$29;
-                  })(), (() => {
-                    var _el$33 = _$createElement("box"),
-                      _el$34 = _$createElement("text");
-                    _$insertNode(_el$33, _el$34);
-                    _$setProp(_el$33, "width", "100%");
-                    _$setProp(_el$33, "flexDirection", "row");
-                    _$setProp(_el$33, "alignItems", "center");
-                    _$setProp(_el$33, "flexShrink", 0);
-                    _$setProp(_el$34, "flexShrink", 1);
-                    _$setProp(_el$34, "wrapMode", "none");
-                    _$insert(_el$34, () => model().activity.parts.join(" · "));
-                    _$effect(_$p => _$setProp(_el$34, "fg", tone(model().activity.tone), _$p));
-                    return _el$33;
-                  })()];
-                }
-              }), _$createComponent(Show, {
-                get when() {
-                  return viewMode() === "expanded";
-                },
-                get children() {
-                  return [(() => {
-                    var _el$35 = _$createElement("box"),
-                      _el$36 = _$createElement("text");
-                    _$insertNode(_el$35, _el$36);
-                    _$setProp(_el$35, "width", "100%");
-                    _$setProp(_el$35, "flexDirection", "row");
-                    _$setProp(_el$35, "alignItems", "center");
-                    _$setProp(_el$35, "flexShrink", 0);
-                    _$setProp(_el$36, "flexShrink", 1);
-                    _$setProp(_el$36, "wrapMode", "none");
-                    _$insert(_el$36, () => model().context.detailParts.join(" · "));
-                    _$effect(_$p => _$setProp(_el$36, "fg", muted(), _$p));
-                    return _el$35;
-                  })(), _$createComponent(For, {
-                    get each() {
-                      return model().detailLines;
-                    },
-                    children: row => (() => {
-                      var _el$50 = _$createElement("box"),
-                        _el$51 = _$createElement("text");
-                      _$insertNode(_el$50, _el$51);
-                      _$setProp(_el$50, "width", "100%");
-                      _$setProp(_el$50, "flexDirection", "row");
-                      _$setProp(_el$50, "alignItems", "center");
-                      _$setProp(_el$50, "flexShrink", 0);
-                      _$setProp(_el$51, "flexShrink", 1);
-                      _$setProp(_el$51, "wrapMode", "none");
-                      _$insert(_el$51, () => row.parts.join(" · "));
-                      _$insert(_el$50, _$createComponent(Show, {
-                        get when() {
-                          return row.cachePolicy;
-                        },
-                        get children() {
-                          return [(() => {
-                            var _el$52 = _$createElement("text");
-                            _$insertNode(_el$52, _$createTextNode(` · cache `));
-                            _$setProp(_el$52, "flexShrink", 0);
-                            _$setProp(_el$52, "wrapMode", "none");
-                            _$effect(_$p => _$setProp(_el$52, "fg", muted(), _$p));
-                            return _el$52;
-                          })(), (() => {
-                            var _el$54 = _$createElement("text"),
-                              _el$55 = _$createElement("b");
-                            _$insertNode(_el$54, _el$55);
-                            _$setProp(_el$54, "flexShrink", 0);
-                            _$setProp(_el$54, "wrapMode", "none");
-                            _$insert(_el$55, () => row.cachePolicy);
-                            _$effect(_$p => _$setProp(_el$54, "fg", tone(row.cacheTone ?? "muted"), _$p));
-                            return _el$54;
-                          })()];
-                        }
-                      }), null);
-                      _$effect(_$p => _$setProp(_el$51, "fg", tone(row.tone), _$p));
-                      return _el$50;
-                    })()
-                  })];
-                }
-              }), _$createComponent(Show, {
-                get when() {
-                  return stale();
-                },
-                get children() {
-                  var _el$37 = _$createElement("text");
-                  _$setProp(_el$37, "flexShrink", 1);
-                  _$setProp(_el$37, "wrapMode", "none");
-                  _$insert(_el$37, () => failed() ? "stats unavailable" : "stats stale");
-                  _$effect(_$p => _$setProp(_el$37, "fg", theme?.text?.faint ?? muted(), _$p));
-                  return _el$37;
-                }
-              })];
+                return _el$18;
+              })()];
             }
           }));
-          return _el$6;
+          return _el$0;
         }
       });
     }
+    const runTrimCommand = async rawArg => {
+      const arg = typeof rawArg === "string" ? rawArg.trim().toLowerCase() : "";
+      if (arg === "minimal" || arg === "collapsed") {
+        setViewMode("collapsed");
+        context.ui?.toast?.show?.({
+          title: "Trim",
+          message: "Sidebar set to minimal"
+        });
+        return;
+      }
+      if (arg === "normal" || arg === "default") {
+        setViewMode("default");
+        context.ui?.toast?.show?.({
+          title: "Trim",
+          message: "Sidebar set to normal"
+        });
+        return;
+      }
+      if (arg === "detail" || arg === "expanded") {
+        setViewMode("expanded");
+        context.ui?.toast?.show?.({
+          title: "Trim",
+          message: "Sidebar set to detail"
+        });
+        return;
+      }
+      if (arg === "toggle") {
+        const next = nextViewMode(viewMode());
+        setViewMode(next);
+        context.ui?.toast?.show?.({
+          title: "Trim",
+          message: "Sidebar set to " + next
+        });
+        return;
+      }
+      let snap = latestState.snapshot;
+      if (activeSessionID) {
+        try {
+          const fresh = await rpc.snapshot({
+            sessionID: activeSessionID
+          }, context.location ? {
+            location: context.location
+          } : undefined);
+          if (fresh) snap = fresh;
+        } catch {}
+      }
+      const report = buildGainReport(snap, Date.now(), {
+        nativeTokens: latestState.nativeTokens,
+        nativeLimitTokens: latestState.nativeLimit,
+        sessionCreatedAt: latestState.sessionCreatedAt,
+        compactionHistory: latestState.history,
+        compactionBreakdown: latestState.compDetails,
+        messageBreakdown: latestState.msgBreakdown
+      });
+      if (typeof context.ui?.dialog?.alert === "function") {
+        await context.ui.dialog.alert({
+          title: "Trim v" + TRIM_VERSION,
+          message: report
+        });
+      } else {
+        context.ui?.toast?.show?.({
+          title: "Trim v" + TRIM_VERSION,
+          message: report
+        });
+      }
+    };
     let disposeSlot;
+    let disposeKeymap;
     try {
       disposeSlot = context.ui.slot({
         append: "sidebar.content",
@@ -746,7 +829,32 @@ export default Plugin.define({
     } catch {
       return () => {};
     }
+    try {
+      if (typeof context.keymap?.layer === "function") {
+        disposeKeymap = context.keymap.layer(() => ({
+          mode: "global",
+          priority: 10,
+          commands: [{
+            id: "opencode-trim.status",
+            title: "Trim status and savings",
+            group: "Trim",
+            palette: true,
+            slash: {
+              name: "trim",
+              aliases: ["trim-gain"],
+              arguments: true
+            },
+            enabled: () => true,
+            run: runTrimCommand
+          }],
+          bindings: []
+        }));
+      }
+    } catch {
+      disposeKeymap = undefined;
+    }
     return () => {
+      if (typeof disposeKeymap === "function") disposeKeymap();else if (disposeKeymap && typeof disposeKeymap.dispose === "function") disposeKeymap.dispose();
       if (typeof disposeSlot === "function") disposeSlot();
     };
   }

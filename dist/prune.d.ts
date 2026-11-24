@@ -1,3 +1,10 @@
+export interface ReduceDirective {
+    scope: 'older_tools' | 'target';
+    target?: string;
+    tool?: string;
+    keepRecent?: number;
+    applyNow?: boolean;
+}
 export interface PruneResult {
     pruned: number;
     removedChars: number;
@@ -5,9 +12,10 @@ export interface PruneResult {
     plannedIds: string[];
     eligibleChars?: number;
     estimatedContextRatio?: number;
+    consumedDirectives?: boolean;
 }
 export interface PruneVaultAdapter {
-    store: (refId: string, entry: any) => boolean;
+    store: (refId: string, entry: any, sessionID?: string) => boolean;
     has: (refId: string) => boolean;
 }
 export declare const PRUNED = "[opencode-trim: old tool output omitted from model context]";

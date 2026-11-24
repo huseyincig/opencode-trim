@@ -8,7 +8,7 @@ const tsx = readFileSync(new URL("src/tui.tsx", root), "utf8")
 const peers = ["@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"]
 
 test("package exposes ./tui and keeps existing exports", () => {
-  assert.equal(pkg.version, "0.9.4")
+  assert.equal(pkg.version, "0.10.0")
   assert.deepEqual(pkg.exports["./tui"], { types: "./dist/tui.d.ts", default: "./dist/tui.js" })
   assert.deepEqual(pkg.exports["./rpc"], { types: "./dist/stats-rpc.d.ts", default: "./dist/stats-rpc.js" })
   for (const k of [".", "./core", "./prune", "./pressure"]) {
@@ -44,15 +44,18 @@ test("tui.tsx contract", () => {
   assert.doesNotMatch(tsx, /replace:\s*"/)
 })
 
-test("visual contract: borderless section, 3-mode header toggle, 100% composition bar, dynamic detail lines", () => {
-  assert.doesNotMatch(tsx, /\bborder\b|borderStyle|borderColor|backgroundColor|panelBg|padding/)
+test("visual contract: borderless pill header, centered 100% composition bar, and two-column StatRows", () => {
+  assert.doesNotMatch(tsx, /\bborder\b|borderStyle|borderColor|panelBg/)
   assert.match(tsx, /<box flexDirection="column" flexShrink=\{0\} width="100%" gap=\{0\}>/)
   assert.match(tsx, /onMouseUp=\{toggle\}/)
+  assert.match(tsx, /justifyContent="center"/)
   assert.match(tsx, /justifyContent="space-between"/)
+  assert.match(tsx, /paddingLeft=\{1\}/)
   assert.match(tsx, /buildSidebarModel\(/)
   assert.match(tsx, /buildHeader\(/)
   assert.match(tsx, /SegmentedBar/)
-  assert.match(tsx, /<b>Trim<\/b>/)
+  assert.match(tsx, /StatRow/)
+  assert.match(tsx, />trim<\/text>/)
   assert.match(tsx, /"▼ "/)
   assert.match(tsx, /"▶ "/)
   assert.match(tsx, /composition\.sysText/)
@@ -127,4 +130,11 @@ test("tui handles v2.4.0 non-blocking startup and plugin/model reload events", (
   assert.match(tsx, /model\.updated/)
   assert.match(tsx, /provider\.updated/)
   assert.match(tsx, /hiddenStopped = false/)
+})
+
+test("tui registers /trim slash command via pure keymap.layer and disposes cleanly", () => {
+  assert.match(tsx, /context\.keymap\?\.layer/)
+  assert.match(tsx, /slash: \{ name: "trim"/)
+  assert.match(tsx, /buildGainReport\(/)
+  assert.match(tsx, /disposeKeymap/)
 })

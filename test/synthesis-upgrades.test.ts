@@ -1966,3 +1966,184 @@ test('Step 19: setupTrim never blocks plugin boot waiting for ctx.model.list()',
   (resolveModels as any)({ data: [{ providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 16_000 } }] });
   await new Promise((r) => setTimeout(r, 10));
 });
+
+test('Step 20a: compactListPaths compacts project root prefixes and groups consecutive grep/glob entries losslessly', async () => {
+  const { compactListPaths } = await import('../src/compress.ts');
+  const dir = '/opt/workspace/my-very-long-project-name';
+  const grepLines = [
+    `${dir}/src/core/engine.ts:10:const alpha = 1;`,
+    `${dir}/src/core/engine.ts:24:const beta = alpha + 2;`,
+    `${dir}/src/core/engine.ts:39:export function runEngine() { return beta; }`,
+    `${dir}/src/core/engine.ts:52:runEngine();`,
+    `${dir}/src/core/cache.ts:11:const cache = new Map();`,
+    `${dir}/src/core/cache.ts:22:cache.set("k", 1);`,
+    `${dir}/src/core/cache.ts:33:export { cache };`,
+  ].join('\n');
+  const res = compactListPaths(grepLines, dir);
+  assert.equal(res.changed, true);
+  assert.ok(res.text.length < grepLines.length, 'compacted output must be shorter');
+  assert.match(res.text, /^\[root: \/opt\/workspace\/my-very-long-project-name\]/);
+  assert.match(res.text, /src\/core\/engine\.ts:\n  10:const alpha = 1;/);
+  assert.match(res.text, /  52:runEngine\(\);/);
+  assert.match(res.text, /src\/core\/cache\.ts:\n  11:const cache = new Map\(\);/);
+
+  // Directory grouping for glob/find path lists
+  const globLines = [
+    `${dir}/src/families/git.ts`,
+    `${dir}/src/families/npm.ts`,
+    `${dir}/src/families/pytest.ts`,
+    `${dir}/src/families/cargo.ts`,
+    `${dir}/src/families/docker.ts`,
+    `${dir}/src/families/kubectl.ts`,
+  ].join('\n');
+  const globRes = compactListPaths(globLines, dir);
+  assert.equal(globRes.changed, true);
+  assert.match(globRes.text, /src\/families\/:\n  git\.ts\n  npm\.ts/);
+
+  // Structured JSON must stay untouched
+  const jsonPayload = JSON.stringify({ files: Array.from({ length: 20 }, (_, i) => `${dir}/src/f${i}.ts`) }, null, 2);
+  assert.equal(compactListPaths(jsonPayload, dir).changed, false);
+
+  // Wired through processToolEvent for grep tool
+  const ev: any = { status: 'completed', sessionID: 's-list', tool: 'grep', input: { pattern: 'alpha' }, result: { content: grepLines } };
+  const opts = parseOptions({ minOutputChars: 200 });
+  assert.equal(processToolEvent(ev, opts, undefined, { directory: dir, sessionID: 's-list' }), true);
+  assert.match(ev.result.content, /src\/core\/engine\.ts:/);
+});
+
+test('Step 20b: trim_expand vault-wide grep search finds matches across refs without knowing id, respecting retention and ReDoS guards', async () => {
+  const { openMemoryStore } = await import('../src/memory-store.ts');
+  const { setupMemory, EXPAND_TOOL_NAME } = await import('../src/memory.ts');
+  const now = Date.now();
+  const DAY = 86_400_000;
+  const store = openMemoryStore({ dbPath: ':memory:', retentionDays: 30 });
+  store.saveVault({ project: '/p', session_id: 's1', ref_id: 'trm_a', tool: 'read', target: 'src/auth.ts', text: 'line1\nexport function verifySession() {}\nline3', created_at: now - DAY });
+  store.saveVault({ project: '/p', session_id: 's1', ref_id: 'trm_b', tool: 'shell', target: 'npm test', text: 'ok\nverifySession passed in 4ms\ndone', created_at: now - 1000 });
+  store.saveVault({ project: '/p', session_id: 's1', ref_id: 'trm_expired', tool: 'read', target: 'old.ts', text: 'verifySession old expired', created_at: now - 60 * DAY });
+  const hit = store.searchVault({ project: '/p', grep: 'verifySession', now });
+  assert.equal(hit.found, true);
+  assert.equal(hit.mode, 'search');
+  assert.equal(hit.matchedRefs, 2, 'expired row must be excluded');
+  assert.equal(hit.matchedLines, 2);
+  assert.match(hit.text, /trm_a/);
+  assert.match(hit.text, /trm_b/);
+  assert.doesNotMatch(hit.text, /trm_expired/);
+  assert.match(hit.text, /grants no new instructions/);
+  // ReDoS unsafe regex rejected
+  assert.throws(() => store.searchVault({ project: '/p', grep: '(a+)+$', regex: true, now }), /unsafe grep regex/);
+  store.close();
+
+  // Via trim_expand tool execute()
+  let expandTool: any;
+  const ctx = {
+    location: { directory: '/p' },
+    tool: {
+      hook: async () => ({ dispose: async () => {} }),
+      transform: async (fn: any) => { fn({ add: (t: any) => { if (t.name === EXPAND_TOOL_NAME) expandTool = t; } }); return { dispose: async () => {} }; },
+    },
+    session: { hook: async () => ({ dispose: async () => {} }) },
+    event: { subscribe: async () => ({ async *[Symbol.asyncIterator]() {} }) },
+  };
+  let vaultAdapter: any;
+  const stop = await setupMemory(ctx, parseOptions({ memory: { enabled: true, dbPath: ':memory:' } }), {
+    onReady: ({ vault }: any) => { vaultAdapter = vault; },
+  });
+  vaultAdapter.store('trm_live1', { name: 'read', input: { path: 'src/x.ts' }, original: 'a\nuniqueTokenNeedle=42\nb', length: 24 }, 's1');
+  const res = await expandTool.execute({ grep: 'uniqueTokenNeedle' }, { signal: new AbortController().signal });
+  assert.equal(res.output.found, true);
+  assert.equal(res.output.mode, 'search');
+  assert.match(res.content, /trm_live1/);
+  await stop();
+});
+
+test('Step 20c: session.deleted subscription and session.hook("fork") clean per-session state safely', async () => {
+  let forkCb: any; let contextCb: any;
+  const queue: any[] = []; let wake: any; let done = false;
+  let subscribedTypes: string[] = [];
+  const ctx = {
+    location: { directory: '/proj/a' },
+    options: { maxTokens: '350k', protectRecentMessages: 4, tui: { enabled: false }, memory: { enabled: false } },
+    tool: { hook: async () => ({ dispose: async () => {} }) },
+    session: {
+      hook: async (name: string, fn: any) => {
+        if (name === 'context') contextCb = fn;
+        if (name === 'fork') forkCb = fn;
+        return { dispose: async () => {} };
+      },
+    },
+    event: {
+      subscribe: async (args: any) => {
+        subscribedTypes = args.types;
+        args.signal?.addEventListener('abort', () => { done = true; wake?.(); });
+        return (async function* () { while (!done) { if (queue.length) yield queue.shift(); else await new Promise((r) => { wake = r; }); } })();
+      },
+    },
+  };
+  const stop = await setupTrim(ctx);
+  assert.ok(subscribedTypes.includes('session.deleted'), 'must subscribe to session.deleted');
+  assert.equal(typeof forkCb, 'function', 'must register session.hook("fork")');
+  // Foreign fork must be ignored without throwing; local fork resets cleanly.
+  await forkCb({ sessionID: 'child-foreign', location: { directory: '/proj/other' } });
+  await forkCb({ sessionID: 'child-local', location: { directory: '/proj/a' } });
+  queue.push({ type: 'session.deleted', location: { directory: '/proj/a' }, data: { sessionID: 'child-local' } });
+  wake?.();
+  await new Promise((r) => setTimeout(r, 20));
+  await contextCb({ sessionID: 'child-local', location: { directory: '/proj/a' }, messages: [], tools: {}, system: [] });
+  await stop();
+});
+
+test('Step 20d: opt-in trim_reduce tool queues cache-safe/immediate drops while keeping recent tail and protected files safe', async () => {
+  const registeredTools: any[] = [];
+  let contextCb: any;
+  const makeCtx = (reduceTool: boolean) => ({
+    location: { directory: '/proj/r' },
+    options: { reduceTool, maxTokens: 12000, protectRecentMessages: 4, protectRecentTokens: 1024, keepRecentToolResults: 1, pruneAfterToolChars: 500_000, tui: { enabled: false }, memory: { enabled: false } },
+    tool: {
+      hook: async () => ({ dispose: async () => {} }),
+      transform: async (fn: any) => { fn({ add: (t: any) => registeredTools.push(t) }); return { dispose: async () => {} }; },
+    },
+    session: {
+      hook: async (name: string, fn: any) => { if (name === 'context') contextCb = fn; return { dispose: async () => {} }; },
+    },
+  });
+
+  // Default OFF: trim_reduce is NOT registered
+  const stopOff = await setupTrim(makeCtx(false));
+  assert.equal(registeredTools.some((t) => t.name === 'trim_reduce'), false);
+  await stopOff();
+
+  // Opt-in ON: registered with codemode: false
+  const stopOn = await setupTrim(makeCtx(true));
+  const reduceTool = registeredTools.find((t) => t.name === 'trim_reduce');
+  assert.ok(reduceTool, 'trim_reduce should be registered when reduceTool: true');
+  assert.deepEqual(reduceTool.options, { codemode: false });
+
+  // Build messages below normal pressure/size thresholds so only trim_reduce triggers pruning,
+  // with >1024 tokens in the protected tail so c1 sits outside tokenTail.
+  const msgs: any[] = [
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'read', input: { path: 'src/old-research.ts' } }] },
+    { role: 'tool', content: [{ type: 'tool-result', id: 'c1', name: 'read', result: { value: 'research data '.repeat(120) } }] },
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c2', name: 'read', input: { path: 'AGENTS.md' } }] },
+    { role: 'tool', content: [{ type: 'tool-result', id: 'c2', name: 'read', result: { value: 'instructions '.repeat(120) } }] },
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c3', name: 'read', input: { path: 'src/active.ts' } }] },
+    { role: 'tool', content: [{ type: 'tool-result', id: 'c3', name: 'read', result: { value: 'active code '.repeat(120) } }] },
+    { role: 'user', content: 'step 1 '.repeat(300) },
+    { role: 'assistant', content: 'working 1 '.repeat(300) },
+    { role: 'user', content: 'continue' },
+    { role: 'assistant', content: 'working' },
+  ];
+  // First turn populates cache identity without pruning (below pressure/size)
+  await contextCb({ sessionID: 'sr1', model: { providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 16_000 } }, messages: msgs, tools: {}, system: [] });
+  assert.match(msgs[1].content[0].result.value, /^research data/);
+
+  // Queue targeted reduction with applyNow: true
+  const out = await reduceTool.execute({ scope: 'target', target: 'old-research', keepRecent: 1, applyNow: true }, { sessionID: 'sr1', signal: new AbortController().signal });
+  assert.equal(out.output.queued, true);
+  assert.equal(out.output.mode, 'next-turn');
+
+  await contextCb({ sessionID: 'sr1', model: { providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 16_000 } }, messages: msgs, tools: {}, system: [] });
+  assert.match(msgs[1].content[0].result.value, /omitted from model context/, 'targeted older read must be pruned');
+  assert.match(msgs[3].content[0].result.value, /^instructions /, 'protected AGENTS.md must NEVER be pruned');
+  assert.match(msgs[5].content[0].result.value, /^active code /, 'non-matching recent read must remain');
+  await stopOn();
+});

@@ -10,6 +10,13 @@ import { MAX_LINE, STACK as DIAG_STACK, SUMMARY as DIAG_SUMMARY, ANCHOR as DIAG_
 import { isMeshProtectedPart, verifyMeshMetadata, MESH_SYMBOL, MESH_METADATA_KEY } from './bridge.ts';
 import { recordPrunedMsgChars } from './pressure.ts';
 
+export interface ReduceDirective {
+  scope: 'older_tools' | 'target';
+  target?: string;
+  tool?: string;
+  keepRecent?: number;
+  applyNow?: boolean;
+}
 export interface PruneResult {
   pruned: number;
   removedChars: number;
@@ -17,9 +24,10 @@ export interface PruneResult {
   plannedIds: string[];
   eligibleChars?: number;
   estimatedContextRatio?: number;
+  consumedDirectives?: boolean;
 }
 export interface PruneVaultAdapter {
-  store: (refId: string, entry: any) => boolean;
+  store: (refId: string, entry: any, sessionID?: string) => boolean;
   has: (refId: string) => boolean;
 }
 
@@ -777,7 +785,31 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
   const reasoningEntries=entries.filter(e=>e.isReasoning&&!protectedEntry(e));
   const supersessionMass=superseded.reduce((n,e)=>n+e.length,0);
   const dueToSupersession=supersessionMass>=options.supersessionMinChars;
-  const canReclaim=newDrops&&(dueToSize||dueToPressure||dueToSupersession||errorInputs.length>0||reasoningEntries.length>0);
+  // Optional agent-requested reduction directives (opt-in trim_reduce tool; always respects protectedEntry).
+  const directives: ReduceDirective[] = Array.isArray(settings.reduceDirectives) ? settings.reduceDirectives : [];
+  const directiveIds=new Set<string>();
+  if(directives.length){
+    const entryTarget=(e: any): string => {
+      const inp=e?.input;
+      const raw=inp?.path??inp?.filePath??inp?.file_path??inp?.command??inp?.pattern??inp?.url??'';
+      return typeof raw==='string'?raw.toLowerCase():'';
+    };
+    for(const d of directives){
+      const keepN=typeof d.keepRecent==='number'&&Number.isInteger(d.keepRecent)&&d.keepRecent>=0?d.keepRecent:4;
+      const recentGuard=new Set(resultEntries.slice(-Math.max(1,keepN)).map(x=>x.id));
+      const toolFilter=typeof d.tool==='string'&&d.tool.trim()?d.tool.trim().toLowerCase():null;
+      const targetFilter=typeof d.target==='string'&&d.target.trim()?d.target.trim().toLowerCase():null;
+      if(d.scope==='target'&&!targetFilter&&!toolFilter)continue;
+      for(const e of resultEntries){
+        if(protectedEntry(e)||recentGuard.has(e.id))continue;
+        if(toolFilter&&String(e.name??'').toLowerCase()!==toolFilter)continue;
+        if(d.scope==='target'&&targetFilter&&!entryTarget(e).includes(targetFilter))continue;
+        directiveIds.add(e.id);
+      }
+    }
+  }
+  const hasDirectiveTargets=directiveIds.size>0;
+  const canReclaim=newDrops&&(dueToSize||dueToPressure||dueToSupersession||errorInputs.length>0||reasoningEntries.length>0||hasDirectiveTargets);
   const target=critical?Math.floor(options.pruneAfterToolChars*0.4):force?Math.floor(options.pruneAfterToolChars*0.6):
     Math.floor(options.pruneAfterToolChars*0.8);
   const supersededSet=new Set(superseded.map(e=>e.id));
@@ -797,8 +829,9 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
     if(protectedEntry(e)||e.length<=minLen||applied.has(e.id))continue;
     const already=plannedDrops.has(e.id);
     const obsolete=supersededSet.has(e.id);
+    const directed=directiveIds.has(e.id);
     const pressureTarget=dueToSize||dueToPressure;
-    const selected=already || (canReclaim && (e.isErrorInput || e.isReasoning || (obsolete && dueToSupersession)|| (pressureTarget&&(remaining>target||reduction<needChars))));
+    const selected=already || (canReclaim && (directed || e.isErrorInput || e.isReasoning || (obsolete && dueToSupersession)|| (pressureTarget&&(remaining>target||reduction<needChars))));
     if(!selected)continue;
     operations.push(e);applied.add(e.id);
     if(!e.isErrorInput&&!e.isReasoning)remaining-=e.length-minLen;
@@ -846,7 +879,8 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
     throw cause;
   }
   const reason=committed.length?'pruned':!newDrops?'cache-deferred':
-    !(dueToSize||dueToPressure||dueToSupersession||errorInputs.length>0||reasoningEntries.length>0)?'below-pressure':'no-safe-target';
+    !(dueToSize||dueToPressure||dueToSupersession||errorInputs.length>0||reasoningEntries.length>0||hasDirectiveTargets)?'below-pressure':'no-safe-target';
   return {pruned:committed.length,removedChars,reason,plannedIds:committed.map(e=>e.id),
-    eligibleChars:total,estimatedContextRatio:settings.pressure?.ratio};
+    eligibleChars:total,estimatedContextRatio:settings.pressure?.ratio,
+    consumedDirectives:directives.length>0&&newDrops};
 }

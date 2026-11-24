@@ -22,6 +22,7 @@ export interface TrimOptions {
   readonly pruning: boolean;
   readonly compactionInputPruning: boolean;
   readonly autoCompact: boolean;
+  readonly reduceTool: boolean;
   readonly minOutputChars: number;
   readonly minSavingsRatio: number;
   readonly maxOutputLines: number;
@@ -62,6 +63,7 @@ export const DEFAULTS = Object.freeze({
   pruning: true,
   compactionInputPruning: false,
   autoCompact: true,
+  reduceTool: false,
   minOutputChars: 1600,
   minSavingsRatio: 0.15,
   maxOutputLines: 160,
@@ -204,7 +206,7 @@ export function parseOptions(options: Record<string, any> = {}): TrimOptions {
     if (parsed.cap !== undefined) result.contextWindowCap = parsed.cap;
     if (parsed.ratioCap !== undefined) result.contextWindowRatioCap = parsed.ratioCap;
   }
-  for(const key of ['enabled','shell','toolFiltering','pruning','compactionInputPruning','autoCompact','purgeErrorInputs','pruneHistoricalReasoning','pruneUnrelatedDiagnostics']) {
+  for(const key of ['enabled','shell','toolFiltering','pruning','compactionInputPruning','autoCompact','reduceTool','purgeErrorInputs','pruneHistoricalReasoning','pruneUnrelatedDiagnostics']) {
     if(typeof result[key] !== 'boolean') throw new TypeError(`opencode-trim: ${key} must be boolean`);
   }
   for(const [field,[min,max]] of Object.entries(ranges)) {

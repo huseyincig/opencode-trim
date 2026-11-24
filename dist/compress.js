@@ -714,3 +714,100 @@ export function dedupToolOutput(text, options) {
         return { text, changed: false };
     return { text: result, changed: true };
 }
+/**
+ * Losslessly compact repeated project root prefixes and group consecutive
+ * file/directory entries in grep/glob/find/ls outputs without dropping matches.
+ */
+export function compactListPaths(text, directory, options) {
+    if (typeof text !== 'string' || text.length < 300 ||
+        (options?.maxInputScanChars && text.length > options.maxInputScanChars) ||
+        looksStructured(text) || text.includes('\x00')) {
+        return { text: typeof text === 'string' ? text : '', changed: false };
+    }
+    const clean = stripAnsi(text);
+    const rawLines = clean.split('\n');
+    if (rawLines.length < 4)
+        return { text, changed: false };
+    let lines = rawLines;
+    let rootHeader = null;
+    if (typeof directory === 'string' && directory.length >= 2) {
+        const norm = directory.replace(/[\\/]+$/, '');
+        if (norm.length >= 2) {
+            const posixPrefix = `${norm}/`;
+            const winPrefix = `${norm}\\`;
+            let hits = 0;
+            for (const l of lines) {
+                if (l.startsWith(posixPrefix) || l.startsWith(winPrefix))
+                    hits++;
+            }
+            if (hits >= 3) {
+                rootHeader = `[root: ${norm}]`;
+                lines = lines.map((l) => l.startsWith(posixPrefix) ? l.slice(posixPrefix.length)
+                    : l.startsWith(winPrefix) ? l.slice(winPrefix.length)
+                        : l);
+            }
+        }
+    }
+    // Group consecutive grep matches (`dir/file:line:...`) sharing the same path (>=3 in a run),
+    // or consecutive plain path lines (`dir/file`) sharing the same parent dir (>=3 in a run).
+    // Require a path separator so bare single-filename lines (e.g. `file.ts:1:hit`) stay untouched.
+    const GREP_LINE = /^([^\s:]*[\\/][^\s:]{1,240}):(\d+(?::\d+)?):(.*)$/;
+    const PATH_LINE = /^([^\s:][^:\n]{1,260})\/([^/\s:\n][^/\n]{0,120})$/;
+    const out = [];
+    if (rootHeader)
+        out.push(rootHeader);
+    let i = 0;
+    while (i < lines.length) {
+        const gm = GREP_LINE.exec(lines[i]);
+        if (gm) {
+            const file = gm[1];
+            let j = i + 1;
+            const run = [[gm[2], gm[3]]];
+            while (j < lines.length) {
+                const next = GREP_LINE.exec(lines[j]);
+                if (!next || next[1] !== file)
+                    break;
+                run.push([next[2], next[3]]);
+                j++;
+            }
+            if (run.length >= 3) {
+                out.push(`${file}:`);
+                for (const [ln, rest] of run)
+                    out.push(`  ${ln}:${rest}`);
+                i = j;
+                continue;
+            }
+        }
+        const pm = PATH_LINE.exec(lines[i]);
+        if (pm && !GREP_LINE.test(lines[i])) {
+            const dir = pm[1];
+            let j = i + 1;
+            const run = [pm[2]];
+            while (j < lines.length) {
+                const next = PATH_LINE.exec(lines[j]);
+                if (!next || next[1] !== dir || GREP_LINE.test(lines[j]))
+                    break;
+                run.push(next[2]);
+                j++;
+            }
+            if (run.length >= 3) {
+                out.push(`${dir}/:`);
+                for (const base of run)
+                    out.push(`  ${base}`);
+                i = j;
+                continue;
+            }
+        }
+        out.push(lines[i]);
+        i++;
+    }
+    const candidate = out.join('\n');
+    const saved = text.length - candidate.length;
+    const minRatio = typeof options?.minSavingsRatio === 'number' ? Math.min(options.minSavingsRatio, 0.1) : 0.1;
+    if (saved < 120 && candidate.length >= text.length * (1 - minRatio)) {
+        return { text, changed: false };
+    }
+    if (candidate.length >= text.length)
+        return { text, changed: false };
+    return { text: candidate, changed: true, reason: 'list-paths' };
+}

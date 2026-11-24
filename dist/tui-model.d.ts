@@ -13,7 +13,7 @@ export declare function compactionHistory(messages: unknown): {
     lastAt: number | null;
     lastReason: string | null;
 } | null;
-export declare const TRIM_VERSION = "0.9.4";
+export declare const TRIM_VERSION = "0.10.0";
 export declare const SECTION_TITLES: Record<string, string>;
 export declare function buildRows(raw: any, now?: number, options?: any): any[];
 export declare function buildSections(raw: any, now?: number, options?: any): any[];
@@ -64,6 +64,13 @@ export interface SidebarDetailLine {
     cachePolicy?: string | null;
     cacheTone?: string;
 }
+export interface SidebarStatRow {
+    key: string;
+    label: string;
+    parts: string[];
+    value: string;
+    tone: string;
+}
 export declare function normalizeViewMode(stored: any): TrimViewMode;
 export declare function nextViewMode(mode: TrimViewMode): TrimViewMode;
 export declare function messageBreakdown(messages: unknown): SidebarBreakdown | null;
@@ -106,5 +113,8 @@ export declare function buildSidebarModel(raw: any, now?: number, options?: any)
         tone: string;
     };
     detailLines: SidebarDetailLine[];
+    normalRows: SidebarStatRow[];
+    detailRows: SidebarStatRow[];
     segments: (width: number) => BarSegments;
 };
+export declare function buildGainReport(raw: any, now?: number, options?: any): string;

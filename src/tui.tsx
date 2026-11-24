@@ -5,6 +5,7 @@ import { Plugin } from "@opencode/plugin/tui"
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { TRIM_STATS_RPC } from "./stats-rpc.ts"
 import {
+  buildGainReport,
   buildHeader,
   buildSidebarModel,
   compactionBreakdown,
@@ -18,13 +19,14 @@ import {
   STORAGE_KEY,
   TRIM_VERSION,
   type BarSegments,
+  type TrimViewMode,
 } from "./tui-model.ts"
 
 const DEBOUNCE_MS = 150
 const POLL_MS = 2000
 const MAX_HIDDEN_RETRIES = 3
-const COLLAPSED_BAR_WIDTH = 18
-const EXPANDED_BAR_WIDTH = 32
+const COLLAPSED_BAR_WIDTH = 14
+const EXPANDED_BAR_WIDTH = 34
 const REFRESH_EVENTS = ["session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.step.ended"]
 const RELOAD_EVENTS = ["plugin.updated", "model.updated", "provider.updated"]
 
@@ -37,6 +39,24 @@ function normDir(v: unknown): string | undefined {
 function isRpcUnavailable(err: unknown): boolean {
   const msg = String((err as any)?.message ?? (err as any)?.code ?? err ?? "").toLowerCase()
   return msg.includes("rpc.unavailable") || msg.includes("unavailable") || msg.includes("404") || msg.includes("not found")
+}
+
+function StatRow(props: {
+  label: string
+  value: string | number
+  labelColor: any
+  valueColor: any
+}) {
+  return (
+    <box width="100%" flexDirection="row" justifyContent="space-between">
+      <text fg={props.labelColor} flexShrink={0} wrapMode="none">
+        {props.label}
+      </text>
+      <text fg={props.valueColor} flexShrink={1} marginLeft={1} wrapMode="none">
+        <b>{props.value}</b>
+      </text>
+    </box>
+  )
 }
 
 function SegmentedBar(props: {
@@ -97,23 +117,42 @@ export default Plugin.define({
     }
 
     const viewMode = () => normalizeViewMode(stored)
-    const toggle = () => {
+    const setViewMode = (mode: TrimViewMode) => {
       try {
         void Promise.resolve(
           updateStored((draft: any) => {
-            const next = nextViewMode(normalizeViewMode(draft))
-            draft.mode = next
-            draft.expanded = next === "expanded"
+            draft.mode = mode
+            draft.expanded = mode === "expanded"
           }),
         ).catch(() => {})
       } catch {}
+    }
+    const toggle = () => setViewMode(nextViewMode(viewMode()))
+    let activeSessionID: string | undefined
+    let latestState: {
+      snapshot: any
+      nativeTokens: number | null
+      nativeLimit: number | null
+      sessionCreatedAt: number | null
+      history: any
+      compDetails: any
+      msgBreakdown: any
+    } = {
+      snapshot: null,
+      nativeTokens: null,
+      nativeLimit: null,
+      sessionCreatedAt: null,
+      history: null,
+      compDetails: null,
+      msgBreakdown: null,
     }
 
     const theme = context.theme
     const base = () => theme?.text?.base ?? "white"
     const muted = () => theme?.text?.muted ?? base()
+    const bgColor = () => theme?.background?.base ?? theme?.background?.panel ?? "#111318"
     const faint = () => theme?.text?.faint ?? "#3f434a"
-    const sysColor = () => theme?.syntax?.keyword ?? theme?.text?.accent?.base ?? "#a875ff"
+    const sysColor = () => theme?.syntax?.keyword ?? theme?.brand?.primary?.base ?? theme?.text?.accent?.base ?? "#a875ff"
     const chatColor = () => theme?.syntax?.function ?? theme?.status?.info?.base ?? "#38bdf8"
     const okColor = () => theme?.status?.success?.base ?? "#4ade80"
     const warnColor = () => theme?.status?.warning?.base ?? "#facc15"
@@ -145,6 +184,7 @@ export default Plugin.define({
         on(
           () => props.sessionID,
           (sessionID) => {
+            activeSessionID = sessionID
             setSnapshot(null)
             setFailed(false)
             setNativeTokens(null)
@@ -194,6 +234,7 @@ export default Plugin.define({
                 next = await rpc.snapshot({ sessionID }, context.location ? { location: context.location } : undefined)
                 if (disposed || mine !== seq) return
                 setSnapshot(next ?? null)
+                latestState.snapshot = next ?? null
                 setFailed(next == null)
                 if (next != null) {
                   setVisible(true)
@@ -235,6 +276,10 @@ export default Plugin.define({
                     setHistory(compactionHistory(list))
                     setCompDetails(compactionBreakdown(list))
                     setMsgBreakdown(messageBreakdown(list))
+                    latestState.nativeTokens = tokens
+                    latestState.history = compactionHistory(list)
+                    latestState.compDetails = compactionBreakdown(list)
+                    latestState.msgBreakdown = messageBreakdown(list)
                   }
                 }
               } catch {
@@ -251,6 +296,8 @@ export default Plugin.define({
                 if (!disposed && mine === seq) {
                   setNativeLimit(meta.limit)
                   setSessionCreatedAt(meta.createdAt)
+                  latestState.nativeLimit = meta.limit
+                  latestState.sessionCreatedAt = meta.createdAt
                 }
               } catch {
                 if (!disposed && mine === seq) {
@@ -361,9 +408,11 @@ export default Plugin.define({
                 >
                   <box flexDirection="row" alignItems="center" flexShrink={0}>
                     <text fg={muted()} wrapMode="none">{"▶ "}</text>
-                    <text fg={base()} wrapMode="none"><b>Trim</b></text>
+                    <box backgroundColor={sysColor()} paddingLeft={1} paddingRight={1}>
+                      <text fg={bgColor()} wrapMode="none">trim</text>
+                    </box>
                   </box>
-                  <box flexDirection="row" alignItems="center" flexShrink={1} marginLeft={1}>
+                  <box flexGrow={1} flexDirection="row" justifyContent="center" alignItems="center" marginLeft={1} marginRight={1}>
                     <SegmentedBar
                       segments={collapsedSegments()}
                       sysColor={sysColor()}
@@ -372,7 +421,7 @@ export default Plugin.define({
                       emptyColor={faint()}
                     />
                   </box>
-                  <box flexDirection="row" alignItems="center" flexShrink={0} marginLeft={1}>
+                  <box flexDirection="row" alignItems="center" flexShrink={0}>
                     <text fg={tone(model().health.tone)} wrapMode="none"><b>{model().context.percentText}</b></text>
                     <Show when={header().marker}>
                       <text fg={tone("warning")} wrapMode="none">{" " + header().marker}</text>
@@ -384,94 +433,129 @@ export default Plugin.define({
               <box
                 width="100%"
                 flexDirection="row"
-                justifyContent="space-between"
                 alignItems="center"
                 flexShrink={0}
                 onMouseUp={toggle}
               >
-                <box flexDirection="row" alignItems="center">
-                  <text fg={muted()} wrapMode="none">{"▼ "}</text>
-                  <text fg={base()} wrapMode="none"><b>Trim</b></text>
+                <text fg={muted()} wrapMode="none">{"▼ "}</text>
+                <box backgroundColor={sysColor()} paddingLeft={1} paddingRight={1}>
+                  <text fg={bgColor()} wrapMode="none">trim</text>
                 </box>
-                <box flexDirection="row" alignItems="center">
-                  <text fg={muted()} wrapMode="none">{"v" + TRIM_VERSION}</text>
-                  <Show when={header().marker}>
-                    <text fg={tone("warning")} wrapMode="none">{" " + header().marker}</text>
-                  </Show>
-                </box>
-              </box>
-              <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
-                <SegmentedBar
-                  segments={expandedSegments()}
-                  sysColor={sysColor()}
-                  chatColor={chatColor()}
-                  toolsColor={okColor()}
-                  emptyColor={faint()}
-                />
-              </box>
-              <box width="100%" flexDirection="row" justifyContent="space-between" alignItems="center" flexShrink={0}>
-                <box flexDirection="row" alignItems="center" flexShrink={0}>
-                  <text fg={sysColor()} wrapMode="none">sys </text>
-                  <text fg={base()} wrapMode="none">{model().composition.sysText}</text>
-                </box>
-                <box flexDirection="row" alignItems="center" flexShrink={0}>
-                  <text fg={chatColor()} wrapMode="none">chat </text>
-                  <text fg={base()} wrapMode="none">{model().composition.chatText}</text>
-                </box>
-                <box flexDirection="row" alignItems="center" flexShrink={0}>
-                  <text fg={okColor()} wrapMode="none">tools </text>
-                  <text fg={base()} wrapMode="none">{model().composition.toolsText}</text>
-                </box>
-              </box>
-              <Show when={viewMode() === "default"}>
-                <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
-                  <text fg={muted()} flexShrink={1} wrapMode="none">
-                    {model().context.parts.join(" · ")}
-                  </text>
-                  <text fg={tone(model().health.tone)} flexShrink={0} marginLeft={2} wrapMode="none">
-                    <b>{"● " + model().health.label}</b>
-                  </text>
-                </box>
-                <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
-                  <text fg={tone(model().activity.tone)} flexShrink={1} wrapMode="none">
-                    {model().activity.parts.join(" · ")}
-                  </text>
-                </box>
-              </Show>
-              <Show when={viewMode() === "expanded"}>
-                <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
-                  <text fg={muted()} flexShrink={1} wrapMode="none">
-                    {model().context.detailParts.join(" · ")}
-                  </text>
-                </box>
-                <For each={model().detailLines}>
-                  {(row) => (
-                    <box width="100%" flexDirection="row" alignItems="center" flexShrink={0}>
-                      <text fg={tone(row.tone)} flexShrink={1} wrapMode="none">
-                        {row.parts.join(" · ")}
-                      </text>
-                      <Show when={row.cachePolicy}>
-                        <text fg={muted()} flexShrink={0} wrapMode="none">{" · cache "}</text>
-                        <text fg={tone(row.cacheTone ?? "muted")} flexShrink={0} wrapMode="none">
-                          <b>{row.cachePolicy}</b>
-                        </text>
-                      </Show>
-                    </box>
-                  )}
-                </For>
-              </Show>
-              <Show when={stale()}>
-                <text fg={theme?.text?.faint ?? muted()} flexShrink={1} wrapMode="none">
-                  {failed() ? "stats unavailable" : "stats stale"}
+                <text fg={muted()} wrapMode="none">{" v" + TRIM_VERSION}</text>
+                <text fg={tone(model().health.tone)} flexShrink={1} wrapMode="none">
+                  {" · ● " + model().health.label}
                 </text>
-              </Show>
+                <Show when={header().marker}>
+                  <text fg={tone("warning")} flexShrink={0} wrapMode="none">{" " + header().marker}</text>
+                </Show>
+              </box>
+              <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={1} gap={0}>
+                <box width="100%" flexDirection="row" justifyContent="center" alignItems="center" flexShrink={0}>
+                  <SegmentedBar
+                    segments={expandedSegments()}
+                    sysColor={sysColor()}
+                    chatColor={chatColor()}
+                    toolsColor={okColor()}
+                    emptyColor={faint()}
+                  />
+                </box>
+                <box width="100%" flexDirection="row" justifyContent="space-between" alignItems="center" flexShrink={0}>
+                  <box flexDirection="row" alignItems="center" flexShrink={0}>
+                    <text fg={sysColor()} wrapMode="none">sys </text>
+                    <text fg={base()} wrapMode="none"><b>{model().composition.sysText}</b></text>
+                  </box>
+                  <box flexDirection="row" alignItems="center" flexShrink={0}>
+                    <text fg={chatColor()} wrapMode="none">chat </text>
+                    <text fg={base()} wrapMode="none"><b>{model().composition.chatText}</b></text>
+                  </box>
+                  <box flexDirection="row" alignItems="center" flexShrink={0}>
+                    <text fg={okColor()} wrapMode="none">tools </text>
+                    <text fg={base()} wrapMode="none"><b>{model().composition.toolsText}</b></text>
+                  </box>
+                </box>
+                <Show when={viewMode() === "default"}>
+                  <For each={model().normalRows}>
+                    {(row) => (
+                      <StatRow
+                        label={row.label}
+                        value={row.parts.join(" · ")}
+                        labelColor={muted()}
+                        valueColor={tone(row.tone)}
+                      />
+                    )}
+                  </For>
+                </Show>
+                <Show when={viewMode() === "expanded"}>
+                  <For each={model().detailRows}>
+                    {(row) => (
+                      <StatRow
+                        label={row.label}
+                        value={row.parts.join(" · ")}
+                        labelColor={muted()}
+                        valueColor={tone(row.tone)}
+                      />
+                    )}
+                  </For>
+                </Show>
+                <Show when={stale()}>
+                  <text fg={theme?.text?.faint ?? muted()} flexShrink={1} wrapMode="none">
+                    {failed() ? "stats unavailable" : "stats stale"}
+                  </text>
+                </Show>
+              </box>
             </Show>
           </box>
         </Show>
       )
     }
 
+    const runTrimCommand = async (rawArg?: unknown) => {
+      const arg = typeof rawArg === "string" ? rawArg.trim().toLowerCase() : ""
+      if (arg === "minimal" || arg === "collapsed") {
+        setViewMode("collapsed")
+        context.ui?.toast?.show?.({ title: "Trim", message: "Sidebar set to minimal" })
+        return
+      }
+      if (arg === "normal" || arg === "default") {
+        setViewMode("default")
+        context.ui?.toast?.show?.({ title: "Trim", message: "Sidebar set to normal" })
+        return
+      }
+      if (arg === "detail" || arg === "expanded") {
+        setViewMode("expanded")
+        context.ui?.toast?.show?.({ title: "Trim", message: "Sidebar set to detail" })
+        return
+      }
+      if (arg === "toggle") {
+        const next = nextViewMode(viewMode())
+        setViewMode(next)
+        context.ui?.toast?.show?.({ title: "Trim", message: "Sidebar set to " + next })
+        return
+      }
+      let snap = latestState.snapshot
+      if (activeSessionID) {
+        try {
+          const fresh = await rpc.snapshot({ sessionID: activeSessionID }, context.location ? { location: context.location } : undefined)
+          if (fresh) snap = fresh
+        } catch {}
+      }
+      const report = buildGainReport(snap, Date.now(), {
+        nativeTokens: latestState.nativeTokens,
+        nativeLimitTokens: latestState.nativeLimit,
+        sessionCreatedAt: latestState.sessionCreatedAt,
+        compactionHistory: latestState.history,
+        compactionBreakdown: latestState.compDetails,
+        messageBreakdown: latestState.msgBreakdown,
+      })
+      if (typeof context.ui?.dialog?.alert === "function") {
+        await context.ui.dialog.alert({ title: "Trim v" + TRIM_VERSION, message: report })
+      } else {
+        context.ui?.toast?.show?.({ title: "Trim v" + TRIM_VERSION, message: report })
+      }
+    }
+
     let disposeSlot: any
+    let disposeKeymap: any
     try {
       disposeSlot = context.ui.slot({
         append: "sidebar.content",
@@ -480,7 +564,31 @@ export default Plugin.define({
     } catch {
       return () => {}
     }
+    try {
+      if (typeof context.keymap?.layer === "function") {
+        disposeKeymap = context.keymap.layer(() => ({
+          mode: "global",
+          priority: 10,
+          commands: [
+            {
+              id: "opencode-trim.status",
+              title: "Trim status and savings",
+              group: "Trim",
+              palette: true,
+              slash: { name: "trim", aliases: ["trim-gain"], arguments: true },
+              enabled: () => true,
+              run: runTrimCommand,
+            },
+          ],
+          bindings: [],
+        }))
+      }
+    } catch {
+      disposeKeymap = undefined
+    }
     return () => {
+      if (typeof disposeKeymap === "function") disposeKeymap()
+      else if (disposeKeymap && typeof disposeKeymap.dispose === "function") disposeKeymap.dispose()
       if (typeof disposeSlot === "function") disposeSlot()
     }
   },
