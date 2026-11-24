@@ -8,7 +8,7 @@ const tsx = readFileSync(new URL("src/tui.tsx", root), "utf8")
 const peers = ["@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"]
 
 test("package exposes ./tui and keeps existing exports", () => {
-  assert.equal(pkg.version, "0.10.1")
+  assert.equal(pkg.version, "0.10.2")
   assert.deepEqual(pkg.exports["./tui"], { types: "./dist/tui.d.ts", default: "./dist/tui.js" })
   assert.deepEqual(pkg.exports["./rpc"], { types: "./dist/stats-rpc.d.ts", default: "./dist/stats-rpc.js" })
   for (const k of [".", "./core", "./prune", "./pressure"]) {
@@ -137,4 +137,22 @@ test("tui registers /trim slash command via pure keymap.layer and disposes clean
   assert.match(tsx, /slash: \{ name: "trim"/)
   assert.match(tsx, /buildGainReport\(/)
   assert.match(tsx, /disposeKeymap/)
+})
+
+test("tui performance: zero JSON.stringify in messageBreakdown, server breakdown skips scan, single-pass cache, idle tick throttle", () => {
+  const modelSrc = readFileSync(new URL("src/tui-model.ts", root), "utf8")
+  const mbStart = modelSrc.indexOf("export function messageBreakdown(")
+  const mbEnd = modelSrc.indexOf("export function compactionBreakdown(")
+  assert.ok(mbStart >= 0 && mbEnd > mbStart)
+  const mbBody = modelSrc.slice(mbStart, mbEnd)
+  assert.doesNotMatch(mbBody, /JSON\.stringify/)
+
+  // tui.tsx skips messageBreakdown when server context.breakdown exists and avoids duplicate list scans
+  assert.match(tsx, /hasServerBreakdown/)
+  assert.match(tsx, /hasServerBreakdown\s*\?\s*null\s*:\s*messageBreakdown\(list\)/)
+  assert.equal((tsx.match(/compactionHistory\(list\)/g) ?? []).length, 1)
+  assert.equal((tsx.match(/compactionBreakdown\(list\)/g) ?? []).length, 1)
+  assert.equal((tsx.match(/messageBreakdown\(list\)/g) ?? []).length, 1)
+  assert.match(tsx, /messageListKey\(list\)/)
+  assert.match(tsx, /IDLE_TICK_MS/)
 })

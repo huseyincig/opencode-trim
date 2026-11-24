@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.2 — 2026-11-24
+
+- **TUI Sidebar Main-Thread Performance Optimization (`src/tui.tsx`, `src/tui-model.ts`)**:
+  - Replaced `JSON.stringify()` in host fallback `messageBreakdown()` with an allocation-free, cycle-safe (`WeakSet`), depth-capped (`<= 4`), and node-budgeted (`4096`) string-length walker that preserves valid `text`/`output`/`content`/`value` payloads even on cyclic objects and stays under ~`2.5 ms` on 600-message histories.
+  - Short-circuited host `messageBreakdown(list)` completely whenever the server RPC snapshot already supplies `context.breakdown`.
+  - Eliminated duplicate message-list scans in `fetchNow()` (`compactionHistory`, `compactionBreakdown`, `messageBreakdown` now run at most once) and added an O(1) `messageListKey(list)` fingerprint cache so unchanged message lists skip rescanning across debounced RPC `changed` bursts and polls.
+  - Throttled idle `setNow()` ticks in the TUI watcher interval to `IDLE_TICK_MS = 30_000` (15x fewer idle Solid memo recomputations while preserving `2 s` live polling during active runs).
+- **Verification**: **`536 / 536`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked against `@opencode/plugin@2.4.1`, `@opentui/core@0.9.9`, and `@opentui/solid@0.9.9`.
+
 ## 0.10.1 — 2026-11-24
 
 - **TUI Sidebar Header & Bar Separation Polish (`src/tui.tsx`)**:

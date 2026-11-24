@@ -218,8 +218,8 @@ test("sections: ordered, only non-empty, label/value/tone/bar exposed", () => {
 })
 
 test("header: title with version, summary only collapsed, marker", () => {
-  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.10.1", summary: "68% | -106k | 12 | mem off", marker: "" })
-  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.10.1", summary: "", marker: "!" })
+  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.10.2", summary: "68% | -106k | 12 | mem off", marker: "" })
+  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.10.2", summary: "", marker: "!" })
   assert.equal(buildHeader(null).marker, "?")
   for (const h of [buildHeader(snap()), buildHeader(null, { expanded: true })]) assert.ok(isAscii(h.title + h.summary + h.marker))
 })
@@ -524,10 +524,42 @@ test("buildGainReport: produces pure ASCII savings and composition breakdown for
     memory: { enabled: true, active: true, summaries: 3, vaultRefs: 12, dbBytes: 4096 },
   }), T0, { nativeTokens: 106000, nativeLimitTokens: 1000000 })
   assert.ok(rep.split("\n").every((l) => isAscii(l)), rep)
-  assert.match(rep, /Trim v0\.10\.1 \(healthy\)/)
+  assert.match(rep, /Trim v0\.10\.2 \(healthy\)/)
   assert.match(rep, /Context: context 106k\/350k \| 30% \(1M\)/)
   assert.match(rep, /Composition \(est\): sys 10% \| chat 24% \| tools 66%/)
   assert.match(rep, /Savings: -106k chars/)
   assert.match(rep, /shell: 18 runs \(-42k chars\)/)
   assert.match(rep, /Tip: \/trim minimal \| normal \| detail \| toggle/)
+})
+
+test("messageBreakdown: handles cyclic objects, V2 tool/result shapes, and large histories without JSON.stringify", () => {
+  const cyclicTool: any = { type: "tool", state: { output: "o".repeat(300), content: [{ text: "c".repeat(100) }] } }
+  cyclicTool.state.self = cyclicTool
+  const toolResult: any = { type: "tool-result", result: { value: "r".repeat(150) } }
+  const bd = messageBreakdown([
+    { type: "system", text: "s".repeat(50) },
+    { type: "user", content: "u".repeat(80) },
+    { type: "assistant", parts: [{ type: "text", text: "a".repeat(70) }, cyclicTool, toolResult] },
+  ])
+  assert.ok(bd)
+  assert.equal(bd.systemChars, 50)
+  assert.equal(bd.chatChars, 150)
+  assert.equal(bd.toolChars, 550)
+
+  // Large session history stays bounded and completes fast without serializing objects
+  const bigMsgs: any[] = []
+  for (let i = 0; i < 600; i++) {
+    bigMsgs.push({
+      type: "assistant",
+      parts: [
+        { type: "text", text: "t".repeat(400) },
+        { type: "tool", state: { output: "x".repeat(4000), meta: { nested: { a: { b: { c: "deep" } } } } } },
+      ],
+    })
+  }
+  const t0 = performance.now()
+  const bigBd = messageBreakdown(bigMsgs)
+  const elapsedMs = performance.now() - t0
+  assert.ok(bigBd && bigBd.chatChars > 0 && bigBd.toolChars > 0)
+  assert.ok(elapsedMs < 100, `messageBreakdown took ${elapsedMs.toFixed(1)}ms`)
 })

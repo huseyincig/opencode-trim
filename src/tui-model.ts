@@ -158,7 +158,7 @@ function totalSaved(snap: any): number | null {
   return any ? sum : null
 }
 
-export const TRIM_VERSION = "0.10.1"
+export const TRIM_VERSION = "0.10.2"
 
 export const SECTION_TITLES: Record<string, string> = { context: "Context", optimization: "Optimization", compaction: "Compaction", memory: "Memory" }
 
@@ -383,6 +383,10 @@ export function nextViewMode(mode: TrimViewMode): TrimViewMode {
 }
 
 // Host-side fallback breakdown from loaded session messages (after the last completed compaction).
+const MEASURE_SKIP_KEYS = new Set([
+  "type", "role", "status", "id", "sessionID", "messageID", "callID", "time", "tokens", "signature", "toolCallId", "toolName",
+])
+
 export function messageBreakdown(messages: unknown): SidebarBreakdown | null {
   if (!Array.isArray(messages) || !messages.length) return null
   let start = 0
@@ -393,16 +397,35 @@ export function messageBreakdown(messages: unknown): SidebarBreakdown | null {
   let systemChars = 0
   let chatChars = 0
   let toolChars = 0
-  const measure = (v: unknown): number => {
+  let budget = 4096
+  const seen = new WeakSet<object>()
+  const measure = (v: unknown, depth: number = 0): number => {
+    if (v == null || budget <= 0) return 0
     if (typeof v === "string") return v.length
-    if (!v || typeof v !== "object") return 0
-    try { return JSON.stringify(v).length } catch { return 0 }
+    if (typeof v !== "object" || depth > 4) return 0
+    if (seen.has(v)) return 0
+    seen.add(v)
+    budget--
+    let total = 0
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length && budget > 0; i++) {
+        total += measure(v[i], depth + 1)
+      }
+      return total
+    }
+    const rec = v as Record<string, unknown>
+    for (const k in rec) {
+      if (budget <= 0) break
+      if (MEASURE_SKIP_KEYS.has(k) || !Object.prototype.hasOwnProperty.call(rec, k)) continue
+      total += measure(rec[k], depth + 1)
+    }
+    return total
   }
   const isToolPart = (p: any): boolean => {
     const t = typeof p?.type === "string" ? p.type.toLowerCase() : ""
     return t === "tool" || t === "tool-call" || t === "tool_use" || t === "tool-result" || t === "tool_result" || t === "tool-invocation" || t === "dynamic-tool"
   }
-  for (let i = start; i < messages.length; i++) {
+  for (let i = start; i < messages.length && budget > 0; i++) {
     const m = messages[i]
     if (!isObj(m)) continue
     const role = String(m.type ?? m.role ?? "").toLowerCase()
@@ -416,7 +439,8 @@ export function messageBreakdown(messages: unknown): SidebarBreakdown | null {
     }
     const content = Array.isArray(m.content) ? m.content : Array.isArray(m.parts) ? m.parts : null
     if (content) {
-      for (const part of content) {
+      for (let j = 0; j < content.length && budget > 0; j++) {
+        const part = content[j]
         if (!isObj(part)) continue
         const len = measure(part)
         if (isToolPart(part)) toolChars += len

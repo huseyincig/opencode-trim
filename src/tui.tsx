@@ -24,11 +24,25 @@ import {
 
 const DEBOUNCE_MS = 150
 const POLL_MS = 2000
+const IDLE_TICK_MS = 30_000
 const MAX_HIDDEN_RETRIES = 3
 const COLLAPSED_BAR_WIDTH = 14
 const EXPANDED_BAR_WIDTH = 34
 const REFRESH_EVENTS = ["session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.step.ended"]
 const RELOAD_EVENTS = ["plugin.updated", "model.updated", "provider.updated"]
+
+function messageListKey(list: unknown): string {
+  if (!Array.isArray(list)) return "none"
+  const len = list.length
+  if (len === 0) return "0"
+  const last = list[len - 1] as any
+  const id = typeof last?.id === "string" ? last.id : ""
+  const status = typeof last?.status === "string" ? last.status : ""
+  const inp = typeof last?.tokens?.input === "number" ? last.tokens.input : -1
+  const cr = typeof last?.tokens?.cache?.read === "number" ? last.tokens.cache.read : -1
+  const parts = Array.isArray(last?.parts) ? last.parts.length : Array.isArray(last?.content) ? last.content.length : -1
+  return `${len}:${id}:${status}:${inp}:${cr}:${parts}`
+}
 
 function normDir(v: unknown): string | undefined {
   if (typeof v !== "string" || !v) return undefined
@@ -202,6 +216,9 @@ export default Plugin.define({
             let modelsSynced = false
             let hiddenRetries = 0
             let hiddenStopped = false
+            let lastMsgKey = ""
+            let lastHadServerBreakdown = false
+            let lastNowTick = Date.now()
 
             const resolveSessionMeta = async (id: string): Promise<{ limit: number | null; createdAt: number | null }> => {
               const session = await Promise.resolve(context.data?.session?.get?.(id))
@@ -246,11 +263,13 @@ export default Plugin.define({
                   if (hiddenRetries >= MAX_HIDDEN_RETRIES) hiddenStopped = true
                   return
                 }
-                setNow(Date.now())
+                lastNowTick = Date.now()
+                setNow(lastNowTick)
               } catch (err) {
                 if (disposed || mine !== seq) return
                 setFailed(true)
-                setNow(Date.now())
+                lastNowTick = Date.now()
+                setNow(lastNowTick)
                 if (!visible()) {
                   hiddenRetries += 1
                   if (isRpcUnavailable(err) || hiddenRetries >= MAX_HIDDEN_RETRIES) hiddenStopped = true
@@ -260,31 +279,48 @@ export default Plugin.define({
 
               if (!visible()) return
 
+              const hasServerBreakdown = Boolean(next?.context?.breakdown)
               try {
                 const messages = context.data?.session?.message
                 if (messages && typeof messages.list === "function") {
                   let list = await Promise.resolve(messages.list(sessionID))
-                  let tokens = nativeContextTokens(list)
-                  if (tokens === null && !messagesSynced && typeof messages.sync === "function") {
-                    // The TUI message cache is empty until synced; sync at most once per session mount.
-                    messagesSynced = true
-                    try { await Promise.resolve(messages.sync(sessionID)) } catch {}
-                    list = await Promise.resolve(messages.list(sessionID))
-                    tokens = nativeContextTokens(list)
-                  }
-                  if (!disposed && mine === seq) {
-                    setNativeTokens(tokens)
-                    setHistory(compactionHistory(list))
-                    setCompDetails(compactionBreakdown(list))
-                    setMsgBreakdown(messageBreakdown(list))
-                    latestState.nativeTokens = tokens
-                    latestState.history = compactionHistory(list)
-                    latestState.compDetails = compactionBreakdown(list)
-                    latestState.msgBreakdown = messageBreakdown(list)
+                  let msgKey = messageListKey(list)
+                  const unchanged = msgKey === lastMsgKey && (hasServerBreakdown || !lastHadServerBreakdown)
+                  if (!unchanged) {
+                    let tokens = nativeContextTokens(list)
+                    if (tokens === null && !messagesSynced && typeof messages.sync === "function") {
+                      // The TUI message cache is empty until synced; sync at most once per session mount.
+                      messagesSynced = true
+                      try { await Promise.resolve(messages.sync(sessionID)) } catch {}
+                      list = await Promise.resolve(messages.list(sessionID))
+                      msgKey = messageListKey(list)
+                      tokens = nativeContextTokens(list)
+                    }
+                    if (!disposed && mine === seq) {
+                      const hist = compactionHistory(list)
+                      const details = compactionBreakdown(list)
+                      const breakdown = hasServerBreakdown ? null : messageBreakdown(list)
+                      lastMsgKey = msgKey
+                      lastHadServerBreakdown = hasServerBreakdown
+                      setNativeTokens(tokens)
+                      setHistory(hist)
+                      setCompDetails(details)
+                      setMsgBreakdown(breakdown)
+                      latestState.nativeTokens = tokens
+                      latestState.history = hist
+                      latestState.compDetails = details
+                      latestState.msgBreakdown = breakdown
+                    }
+                  } else if (hasServerBreakdown && !lastHadServerBreakdown && !disposed && mine === seq) {
+                    lastHadServerBreakdown = true
+                    setMsgBreakdown(null)
+                    latestState.msgBreakdown = null
                   }
                 }
               } catch {
                 if (!disposed && mine === seq) {
+                  lastMsgKey = ""
+                  lastHadServerBreakdown = false
                   setNativeTokens(null)
                   setHistory(null)
                   setCompDetails(null)
@@ -349,10 +385,19 @@ export default Plugin.define({
             // Single unified interval: refreshes running sessions, ages relative timestamps, and stops retrying when RPC is off.
             const watcher = setInterval(() => {
               if (disposed) return
-              setNow(Date.now())
+              const nowMs = Date.now()
               if (visible()) {
-                if (running()) void fetchNow()
+                if (running()) {
+                  lastNowTick = nowMs
+                  setNow(nowMs)
+                  void fetchNow()
+                } else if (nowMs - lastNowTick >= IDLE_TICK_MS) {
+                  lastNowTick = nowMs
+                  setNow(nowMs)
+                }
               } else if (!hiddenStopped) {
+                lastNowTick = nowMs
+                setNow(nowMs)
                 void fetchNow()
               }
             }, POLL_MS)
