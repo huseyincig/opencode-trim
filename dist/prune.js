@@ -3,12 +3,34 @@
  * supersession reclaim. Never reads/writes the host database or replaces
  * user, system, assistant prose, tools or inputs.
  */
+import { isAbsolute, posix as posixPath, win32 as win32Path } from 'node:path';
 import { types } from 'node:util';
 import { isProtectedCommand } from "./filters.js";
 import { splitSegments, shellWords, skipPrefixWords } from "./families/util.js";
 import { MAX_LINE, STACK as DIAG_STACK, SUMMARY as DIAG_SUMMARY, ANCHOR as DIAG_ANCHOR, CODE as DIAG_CODE, hasFailureText, parseExitCode } from "./diagnostics.js";
 import { isMeshProtectedPart, verifyMeshMetadata, MESH_SYMBOL, MESH_METADATA_KEY } from "./bridge.js";
 import { recordPrunedMsgChars } from "./pressure.js";
+/**
+ * Economic break-even check for warm prompt-cache invalidation.
+ * Cold caches and critical pressure always pass; warm caches require savedChars to beat
+ * both a floor (minSavingsChars) and the amortized rewrite penalty across expectedTurns.
+ */
+export function evaluateCacheBreakEven(input) {
+    if (input.isColdCache)
+        return { allow: true, reason: 'cold-cache' };
+    if (input.isCritical)
+        return { allow: true, reason: 'critical-pressure' };
+    const saved = Number.isFinite(input.savedChars) ? Math.max(0, input.savedChars) : 0;
+    const remaining = Number.isFinite(input.remainingChars) ? Math.max(0, input.remainingChars) : 0;
+    const minFloor = typeof input.minSavingsChars === 'number' && Number.isFinite(input.minSavingsChars) ? Math.max(0, input.minSavingsChars) : 6000;
+    if (saved < minFloor)
+        return { allow: false, reason: 'below-min-savings' };
+    const turns = typeof input.expectedTurns === 'number' && Number.isFinite(input.expectedTurns) && input.expectedTurns > 0 ? input.expectedTurns : 4;
+    const penaltyRatio = typeof input.writeOverheadRatio === 'number' && Number.isFinite(input.writeOverheadRatio) && input.writeOverheadRatio >= 0 ? input.writeOverheadRatio : 0.25;
+    if (saved * turns > remaining * penaltyRatio)
+        return { allow: true, reason: 'positive-roi' };
+    return { allow: false, reason: 'warm-cache-unprofitable' };
+}
 export const PRUNED = '[opencode-trim: old tool output omitted from model context]';
 export const PRUNED_ERROR_INPUT = '[opencode-trim: oversized input of failed tool call omitted; error output preserved]';
 export const PRUNED_REASONING = '[opencode-trim: historical reasoning trace omitted]';
@@ -163,6 +185,121 @@ function obj(x) { return x !== null && typeof x === 'object' && !Array.isArray(x
 function safeString(x) { return typeof x === 'string' ? x : ''; }
 function fingerprint(s) { let h = 2166136261; for (let i = 0; i < s.length; i++)
     h = Math.imul(h ^ s.charCodeAt(i), 16777619); return (h >>> 0).toString(16); }
+/**
+ * Deterministic message key for OpenCode V2 Prompt.Message objects that may omit `msg.id`.
+ * Never hashes mutable tool outputs, so the key stays invariant before and after pruning.
+ */
+export function stableMessageKey(msg) {
+    if (!obj(msg) || trapped(msg))
+        return '';
+    const rawId = data(msg, 'id');
+    if (typeof rawId === 'string' && rawId)
+        return rawId;
+    let h = 2166136261;
+    const feed = (s) => {
+        for (let i = 0; i < s.length; i++)
+            h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+        h = Math.imul(h ^ 0x1f, 16777619);
+    };
+    const role = data(msg, 'role') ?? data(msg, 'type');
+    feed(typeof role === 'string' ? role : '');
+    const rawContent = data(msg, 'content');
+    if (typeof rawContent === 'string') {
+        feed(rawContent.slice(0, 512));
+        feed(String(rawContent.length));
+    }
+    else if (isArr(rawContent)) {
+        const lim = Math.min(rawContent.length, 64);
+        feed(String(rawContent.length));
+        for (let i = 0; i < lim; i++) {
+            const part = at(rawContent, i);
+            if (!obj(part) || trapped(part))
+                continue;
+            const ptype = data(part, 'type');
+            feed(typeof ptype === 'string' ? ptype : '');
+            const pid = data(part, 'id') ?? data(part, 'callID');
+            if (typeof pid === 'string')
+                feed(pid);
+            const pname = data(part, 'name') ?? data(part, 'tool');
+            if (typeof pname === 'string')
+                feed(pname);
+            if (ptype === 'text') {
+                const t = data(part, 'text');
+                if (typeof t === 'string') {
+                    feed(t.slice(0, 256));
+                    feed(String(t.length));
+                }
+            }
+            else if (ptype === 'tool' || ptype === 'tool-call' || ptype === 'tool-result') {
+                const inp = getInput(part);
+                if (obj(inp) && !trapped(inp)) {
+                    const p = data(inp, 'filePath') ?? data(inp, 'path') ?? data(inp, 'file_path') ?? data(inp, 'command') ?? data(inp, 'pattern') ?? data(inp, 'url');
+                    if (typeof p === 'string')
+                        feed(p.slice(0, 256));
+                    const off = data(inp, 'offset') ?? data(inp, 'startLine');
+                    const cnt = data(inp, 'limit') ?? data(inp, 'endLine');
+                    if (typeof off === 'number')
+                        feed(`o:${off}`);
+                    if (typeof cnt === 'number')
+                        feed(`l:${cnt}`);
+                }
+            }
+        }
+    }
+    return `m_${(h >>> 0).toString(16).padStart(8, '0')}`;
+}
+const FILE_WRITE_TOOL = /^(?:edit|write|patch|apply_patch|[a-z][a-z0-9]{1,24}[_-](?:edit|write|patch|replace|create|delete))$/i;
+function normalizeTargetPath(raw, baseDir) {
+    if (typeof raw !== 'string' || !raw || raw.includes('\0') || raw.length > KEY_MAX)
+        return '';
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed === '.')
+        return '';
+    const isWinBase = typeof baseDir === 'string' && (/^[a-z]:[\\/]/i.test(baseDir) || baseDir.startsWith('\\\\'));
+    const isWinRaw = /^[a-z]:[\\/]/i.test(trimmed) || trimmed.startsWith('\\\\');
+    if (isWinRaw || isWinBase) {
+        const resolved = (isWinRaw || !baseDir) ? win32Path.normalize(trimmed) : win32Path.resolve(baseDir, trimmed);
+        const norm = resolved.replace(/\\/g, '/');
+        return /^[A-Z]:\//.test(norm) ? norm[0].toLowerCase() + norm.slice(1) : norm;
+    }
+    if (trimmed.startsWith('/'))
+        return posixPath.normalize(trimmed);
+    if (typeof baseDir === 'string' && baseDir && isAbsolute(baseDir)) {
+        return posixPath.resolve(baseDir.replace(/\\/g, '/'), trimmed.replace(/\\/g, '/'));
+    }
+    let p = posixPath.normalize(trimmed.replace(/\\/g, '/'));
+    while (p.startsWith('./'))
+        p = p.slice(2);
+    return p === '.' ? '' : p;
+}
+function extractWritePaths(part, input, baseDir) {
+    const paths = [];
+    const push = (v) => { const n = normalizeTargetPath(v, baseDir); if (n)
+        paths.push(n); };
+    if (obj(input) && !trapped(input)) {
+        push(data(input, 'filePath') ?? data(input, 'path') ?? data(input, 'file_path'));
+    }
+    const meta = data(data(part, 'state'), 'metadata') ?? data(data(part, 'result'), 'metadata') ?? data(part, 'metadata');
+    if (obj(meta) && !trapped(meta)) {
+        const files = data(meta, 'files');
+        if (isArr(files) && !trapped(files)) {
+            const lim = Math.min(files.length, 64);
+            for (let i = 0; i < lim; i++) {
+                const f = at(files, i);
+                if (!obj(f) || trapped(f))
+                    continue;
+                push(data(f, 'filePath') ?? data(f, 'path'));
+                push(data(f, 'movePath'));
+            }
+        }
+    }
+    return paths;
+}
+function pathsMatchForStaleRead(readPath, writePath) {
+    if (!readPath || !writePath)
+        return false;
+    return readPath === writePath;
+}
 function structured(text) {
     const s = text.trimStart();
     if (/^-----BEGIN /i.test(s) || text.includes('\x00'))
@@ -810,12 +947,13 @@ function collectErrorInputCandidates(call, callId, name, opts, out) {
     }
 }
 /** Pair by call id in source order, never join an unrelated earlier assistant call. */
-function candidates(event, opts) {
+function candidates(event, opts, baseDir) {
     const messages = event?.messages;
     if (!Array.isArray(messages) || messages.length > 10000)
-        return [];
+        return { entries: [], fileWrites: [] };
     const pending = new Map();
     const out = [];
+    const fileWrites = [];
     let totalParts = 0;
     for (let mi = 0; mi < messages.length; mi++) {
         const msg = at(messages, mi);
@@ -831,8 +969,7 @@ function candidates(event, opts) {
         totalParts += content.length;
         if (totalParts > MAX_PARTS_TOTAL)
             break;
-        const rawId = data(msg, 'id');
-        const msgId = typeof rawId === 'string' ? rawId : '';
+        const msgId = stableMessageKey(msg);
         const role = data(msg, 'role') ?? data(msg, 'type');
         if (role === 'assistant' && opts.pruneHistoricalReasoning !== false && !isTrimMeshProtected(msg, msg, event?.sessionID)) {
             const rc = data(msg, 'reasoning_content');
@@ -889,6 +1026,19 @@ function candidates(event, opts) {
                 }
                 continue;
             }
+            if (role !== 'user' && FILE_WRITE_TOOL.test(name) && !failure(part)) {
+                if (type !== 'tool' || data(data(part, 'state'), 'status') === 'completed') {
+                    const wInput = call?.input ?? getInput(part);
+                    if (!trapped(wInput)) {
+                        const wd = safeString(data(wInput, 'workdir')), cw = safeString(data(wInput, 'cwd'));
+                        const wBase = wd || cw || baseDir;
+                        const scope = `${wd}\0${cw}`;
+                        for (const wp of extractWritePaths(part, wInput, wBase)) {
+                            fileWrites.push({ mi, pi, path: wp, scope });
+                        }
+                    }
+                }
+            }
             if (role === 'user' || !eligibleTool(name, opts) || failure(part))
                 continue;
             if (type === 'tool' && data(data(part, 'state'), 'status') !== 'completed')
@@ -908,19 +1058,24 @@ function candidates(event, opts) {
                 continue;
             // Stable across appends and history compaction: never include a row index.
             const id = `${name}:${safeString(callId) || '?'}:${fingerprint(text)}:${msgId}`;
+            const wd = safeString(data(input, 'workdir')), cw = safeString(data(input, 'cwd'));
+            const rBase = wd || cw || baseDir;
             out.push({ id, mi, pi, name, input, accessor: a, length: text.length,
                 supKey: supersessionKey(name, input),
+                readPath: name === 'read' ? normalizeTargetPath(pathOf(input), rBase) : '',
+                readScope: `${wd}\0${cw}`,
                 range: name === 'read' ? readRange(input) : undefined,
                 original: text });
         }
     }
-    return out;
+    return { entries: out, fileWrites };
 }
 /** Called with an outgoing-only draft. plannedDrops contains stable per-session result keys. */
 export function pruneContext(event, options, settings = {}) {
     if (!options.pruning || !Array.isArray(event?.messages))
         return { pruned: 0, removedChars: 0, reason: 'disabled', plannedIds: [] };
-    const entries = candidates(event, options);
+    const baseDir = typeof settings.directory === 'string' && settings.directory ? settings.directory : undefined;
+    const { entries, fileWrites } = candidates(event, options, baseDir);
     const resultEntries = entries.filter(x => !x.isErrorInput && !x.isReasoning);
     const keep = new Set(resultEntries.slice(-options.keepRecentToolResults).map(x => x.id));
     const tail = Math.max(0, event.messages.length - options.protectRecentMessages);
@@ -960,6 +1115,7 @@ export function pruneContext(event, options, settings = {}) {
         groups.set(e.supKey, arr);
     }
     const superseded = [];
+    const supersededIds = new Set();
     for (const arr of groups.values()) {
         for (let i = 0; i < arr.length - 1; i++) {
             const earlier = arr[i];
@@ -968,6 +1124,26 @@ export function pruneContext(event, options, settings = {}) {
             for (let j = i + 1; j < arr.length; j++) {
                 if (supersedes(arr[j], earlier)) {
                     superseded.push(earlier);
+                    supersededIds.add(earlier.id);
+                    break;
+                }
+            }
+        }
+    }
+    // Write-invalidated stale reads: a later successful edit/write/patch to the same file
+    // supersedes earlier reads of that file so stale source code is reclaimed (and archived to vault).
+    if (fileWrites.length) {
+        for (const earlier of resultEntries) {
+            if (earlier.name !== 'read' || !earlier.readPath || protectedEntry(earlier) || supersededIds.has(earlier.id))
+                continue;
+            for (const w of fileWrites) {
+                if (w.mi < earlier.mi || (w.mi === earlier.mi && w.pi <= earlier.pi))
+                    continue;
+                if (w.scope !== earlier.readScope && w.scope !== '\0' && earlier.readScope !== '\0')
+                    continue;
+                if (pathsMatchForStaleRead(earlier.readPath, w.path)) {
+                    superseded.push(earlier);
+                    supersededIds.add(earlier.id);
                     break;
                 }
             }
@@ -1039,6 +1215,32 @@ export function pruneContext(event, options, settings = {}) {
             remaining -= e.length - minLen;
         reduction += e.length - minLen;
     }
+    // Economic break-even gate on verified warm provider caches: keep replaying already-committed
+    // drops, but defer small net-new cache busts until savings justify the prefix rewrite cost.
+    let warmCacheDeferred = false;
+    if (settings.warmCache === true && settings.coldCache !== true && !critical && !hasDirectiveTargets && operations.length > 0) {
+        const newOps = operations.filter(e => !plannedDrops.has(e.id));
+        if (newOps.length > 0) {
+            const newSaved = newOps.reduce((sum, e) => {
+                const minLen = e.isErrorInput ? PRUNED_ERROR_INPUT.length : e.isReasoning ? PRUNED_REASONING.length : PRUNED.length;
+                return sum + Math.max(0, e.length - minLen);
+            }, 0);
+            const activeChars = typeof settings.pressure?.estimatedChars === 'number' && settings.pressure.estimatedChars > 0 ? settings.pressure.estimatedChars : total;
+            const roi = evaluateCacheBreakEven({
+                savedChars: newSaved,
+                remainingChars: Math.max(0, activeChars - newSaved),
+                isColdCache: false,
+                isCritical: false,
+                minSavingsChars: options.cacheMinSavingsChars ?? 6000,
+            });
+            if (!roi.allow) {
+                const replays = operations.filter(e => plannedDrops.has(e.id));
+                operations.length = 0;
+                operations.push(...replays);
+                warmCacheDeferred = true;
+            }
+        }
+    }
     let removedChars = 0;
     const committed = [];
     try {
@@ -1092,9 +1294,10 @@ export function pruneContext(event, options, settings = {}) {
         }
         throw cause;
     }
-    const reason = committed.length ? 'pruned' : !newDrops ? 'cache-deferred' :
+    const reason = committed.length ? 'pruned' : (!newDrops || warmCacheDeferred) ? 'cache-deferred' :
         !(dueToSize || dueToPressure || dueToSupersession || errorInputs.length > 0 || reasoningEntries.length > 0 || hasDirectiveTargets) ? 'below-pressure' : 'no-safe-target';
     return { pruned: committed.length, removedChars, reason, plannedIds: committed.map(e => e.id),
         eligibleChars: total, estimatedContextRatio: settings.pressure?.ratio,
-        consumedDirectives: directives.length > 0 && newDrops };
+        consumedDirectives: directives.length > 0 && newDrops,
+        warmCacheDeferred };
 }

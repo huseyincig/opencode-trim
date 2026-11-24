@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.0 — 2026-11-24
+
+- **Cold-Cache Opportunity Window & Economic Break-Even Gate (`src/cache.ts`, `src/prune.ts`, `src/config.ts`, `src/plugin.ts`)**:
+  - Added `cacheTtlMs` (`300_000` ms default) and `cacheMinSavingsChars` (`6000` default) options, plus `ContextCache.observeCacheRead()` fed by `session.step.ended` provider `cache.read` counts.
+  - Opens zero-penalty pruning admission whenever the prompt cache is already cold (idle `>= cacheTtlMs` or observed `cache.read === 0`); defers unprofitable small net-new cache busts on verified warm caches via `evaluateCacheBreakEven()` (with automatic `startBandAdmitted`/`sizeMark` rollback on deferral, while always replaying committed `plannedDrops` and honoring critical pressure).
+- **Write-Invalidated Stale-Read Pruning (`src/prune.ts`, `src/plugin.ts`)**:
+  - Tracks completed, non-failed file writes/edits/patches (`edit`, `write`, `apply_patch`, `patch`, and generic write suffixes) and marks earlier `read` outputs of the exact canonical file path as superseded (archived to `vault` when memory is enabled; failed edits, recent tails, and instruction/secret files remain untouched).
+- **Post-Compaction Verification, Top-3 Tool Bloat & System/Schema Overhead Diagnostics (`src/pressure.ts`, `src/stats.ts`, `src/tui-model.ts`)**:
+  - Measures `afterRatio` and `verification` (`effective` | `under-reduced` | `grew`) on the first post-compaction turn and displays `Compaction check:` in `/trim`.
+  - Computes privacy-safe `diagnostics` (`toolSchemaChars`, `toolCount`, and top-3 sanitized `topTools`) in a single pass inside `estimateRequest()` and renders `Top tools:` and `Overhead alert:` lines in `/trim`.
+- **Prompt-Cache-Safe Frozen `<recent_work>` & Expanded `trim_history_search` (`src/memory-store.ts`, `src/memory.ts`, `src/config.ts`)**:
+  - Added `recent: true` (chronological listing without query) and `scope: "project" | "all"` to `trim_history_search`, and fixed default `openMemoryStore()` limit clamping so `limit: 1..20` is honored while explicit `maxResults` caps remain enforced.
+  - Added opt-in `memory.recentWork` (default `false`): builds a sanitized, redacted `<recent_work>` block once per top-level session from `memory.db` and freezes it byte-identically for the session's lifetime (never injected into subagent, compaction, title, or generate requests).
+- **Deterministic FNV-1a `stableMessageKey()` Fallback (`src/prune.ts`)**:
+  - Added `stableMessageKey(msg)` for ID-less OpenCode V2 `Prompt.Message` objects without hashing mutable tool outputs, preserving `ContextCache` replay stability across turns and post-prune mutations.
+- **Verification**: **`542 / 542`** tests passing across 29 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), zero circular imports, `94 / 94` files syntax-checked, and isolated packed tarball verified on Node 26.
+
 ## 0.10.2 — 2026-11-24
 
 - **TUI Sidebar Main-Thread Performance Optimization (`src/tui.tsx`, `src/tui-model.ts`)**:

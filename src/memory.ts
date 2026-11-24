@@ -170,8 +170,20 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
       try { pendingDisposals.push(Promise.resolve(r.dispose())); } catch { /* keep disposing the rest */ }
     }
     await Promise.allSettled(pendingDisposals);
+    pending.clear();
+    awaitingAfter.clear();
+    frozenRecentWork.clear();
     callHook(hooks?.onClose, { project });
     try { store.close(); } catch {}
+  };
+  const pending = new Map();
+  const awaitingAfter = new Map(); // sessionID -> { event_id, sessionID }
+  const frozenRecentWork = new Map<string, string | null>(); // sessionID -> frozen <recent_work> block (prompt-cache stable)
+  const forgetSession = (sid: unknown): void => {
+    if (typeof sid !== 'string' || !sid) return;
+    pending.delete(sid);
+    awaitingAfter.delete(sid);
+    frozenRecentWork.delete(sid);
   };
   try {
     const vault = {
@@ -191,7 +203,7 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
         return store.hasVault(project, refId);
       },
     };
-    callHook(hooks?.onReady, { project, store, dbPath, vault });
+    callHook(hooks?.onReady, { project, store, dbPath, vault, forgetSession });
     // Fail-closed gate first so the tools are never exposed without it.
     regs.push(validReg(await ctx.tool.hook('execute.before', (event: any) => {
       if (event?.tool !== TOOL_NAME && event?.tool !== EXPAND_TOOL_NAME) return;
@@ -307,18 +319,20 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
       });
       editor.add({
         name: TOOL_NAME,
-        description: 'Search archived compaction summaries of earlier context for this project. Supports optional section, sessionID, days, limit, and fullSection filters.',
+        description: 'Search or list archived compaction summaries of earlier context. Pass `query` for FTS5 search, or `recent: true` to list newest summaries; supports optional `scope` ("project" | "all"), section, sessionID, days, limit, and fullSection filters.',
         input: {
           type: 'object',
           properties: {
-            query: { type: 'string', minLength: 1, maxLength: MAX_QUERY },
+            query: { type: 'string', minLength: 1, maxLength: MAX_QUERY, description: 'Search query (required unless `recent: true`).' },
+            recent: { type: 'boolean', description: 'Optional: list newest archived summaries chronologically without a search query.' },
+            scope: { type: 'string', enum: ['project', 'all'], description: 'Optional: search/list only this project ("project", default) or across all projects in memory.db ("all").' },
             section: { type: 'string', description: `Optional: restrict the match to one section of the archived summary. One of: ${SECTION_NAMES.join(', ')} (case, spaces and hyphens are tolerated, e.g. "Work State", "next-move").` },
             sessionID: { type: 'string', maxLength: 256, description: 'Optional: restrict search to a specific session ID.' },
             days: { type: 'integer', minimum: 1, maximum: 3650, description: 'Optional: restrict search to summaries from the last N days.' },
             limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Optional: maximum number of results to return (default 5, max 20).' },
             fullSection: { type: 'boolean', description: 'Optional: return expanded section/summary excerpts (up to 2400 chars) instead of 400-char snippets.' },
           },
-          required: ['query'], additionalProperties: false,
+          required: [], additionalProperties: false,
         },
         output: {
           type: 'object',
@@ -347,8 +361,15 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
         options: { codemode: false },
         execute: async (input: any, context: any) => {
           if (context?.signal?.aborted) throw new Error('Cancelled');
+          const recent = input?.recent === true;
           const q = input?.query;
-          if (typeof q !== 'string' || !q.trim() || q.length > MAX_QUERY) throw new Error('query must be a non-empty string');
+          if (!recent) {
+            if (typeof q !== 'string' || !q.trim() || q.length > MAX_QUERY) throw new Error('query must be a non-empty string');
+          } else if (q !== undefined && q !== null && (typeof q !== 'string' || q.length > MAX_QUERY)) {
+            throw new Error('query must be a string up to 500 chars');
+          }
+          const scope = input?.scope === undefined || input?.scope === null ? 'project' : input.scope;
+          if (scope !== 'project' && scope !== 'all') throw new Error('scope must be "project" or "all"');
           let section;
           if (input.section !== undefined && input.section !== null) {
             section = normalizeSection(input.section);
@@ -365,7 +386,9 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
           }
           const results = store.search({
             project,
-            query: q,
+            ...(typeof q === 'string' && q.trim() ? { query: q } : {}),
+            recent,
+            scope,
             ...(section ? { section } : {}),
             ...(input.sessionID ? { sessionID: input.sessionID } : {}),
             ...(input.days ? { days: input.days } : {}),
@@ -377,15 +400,33 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
         },
       });
     })));
-    const pending = new Map();
-    const awaitingAfter = new Map(); // sessionID -> { event_id, sessionID }
     // The summary enters context after compaction.ended; the next context hook for that session sees the real size.
+    // When memory.recentWork is opted in, also inject a frozen per-session <recent_work> block for top-level sessions.
     regs.push(validReg(await ctx.session.hook('context', (event: any) => {
       try {
         const sid = event?.sessionID;
         if (typeof sid !== 'string' || !sid) return;
         const ls = locationState(event, localDir);
         if (ls !== 'local' && ls !== 'absent') return;
+        if (
+          mem.recentWork === true &&
+          Array.isArray(event?.system) &&
+          !event?.parentID &&
+          !event?.session?.parentID &&
+          event?.kind !== 'compaction' &&
+          event?.kind !== 'title' &&
+          event?.kind !== 'generate'
+        ) {
+          let block = frozenRecentWork.get(sid);
+          if (block === undefined) {
+            block = store.recentWork({ project, limit: 5 });
+            if (frozenRecentWork.size >= 128) frozenRecentWork.delete(frozenRecentWork.keys().next().value as string);
+            frozenRecentWork.set(sid, block);
+          }
+          if (block && !event.system.includes(block)) {
+            event.system.push(block);
+          }
+        }
         const wait = awaitingAfter.get(sid);
         if (!wait) return;
         awaitingAfter.delete(sid);

@@ -517,7 +517,7 @@ function initSchema(db: DatabaseSync): void {
 export function openMemoryStore({
   dbPath,
   retentionDays = 90,
-  maxResults = 5,
+  maxResults,
   maxSnippetChars = 400,
   maxVaultRows = 500,
   project,
@@ -536,6 +536,7 @@ export function openMemoryStore({
     }
   }
   const retentionMs = clampInt(retentionDays, 90, 1, 36500) * DAY_MS;
+  const hasExplicitMaxResults = maxResults !== undefined;
   const defaultLimit = clampInt(maxResults, 5, 1, 50);
   const defaultSnippet = clampInt(maxSnippetChars, 400, 20, 4000);
   const vaultCap = clampInt(maxVaultRows, 500, 1, 5000);
@@ -564,6 +565,26 @@ export function openMemoryStore({
     WHERE history_fts MATCH ? AND h.project = ? AND h.created_at >= ?
     ORDER BY rank, h.created_at DESC, h.id DESC
     LIMIT ? OFFSET ?`);
+  const searchAllPageStmt = db.prepare(`
+    SELECT h.id, h.event_id, h.project, h.session_id, h.model, h.reason, h.created_at, h.text,
+           bm25(history_fts) AS rank
+    FROM history_fts
+    JOIN history h ON h.id = history_fts.rowid
+    WHERE history_fts MATCH ? AND h.created_at >= ?
+    ORDER BY rank, h.created_at DESC, h.id DESC
+    LIMIT ? OFFSET ?`);
+  const recentProjectStmt = db.prepare(`
+    SELECT id, event_id, project, session_id, model, reason, created_at, text
+    FROM history
+    WHERE project = ? AND created_at >= ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?`);
+  const recentAllStmt = db.prepare(`
+    SELECT id, event_id, project, session_id, model, reason, created_at, text
+    FROM history
+    WHERE created_at >= ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?`);
   const updateAfterStmt = db.prepare('UPDATE history SET context_after_tokens = ? WHERE project = ? AND event_id = ?');
   const statsStmt = db.prepare('SELECT count(*) AS c, max(created_at) AS m FROM history WHERE project = ? AND created_at >= ?');
   const vaultStatsStmt = db.prepare('SELECT count(*) AS c, coalesce(sum(length(text)), 0) AS chars FROM vault WHERE project = ? AND created_at >= ?');
@@ -649,8 +670,9 @@ export function openMemoryStore({
       return { updated: Number(res.changes) > 0 };
     },
 
-    search({ project, query, section, sessionID, days, limit, maxSnippetChars: snip, fullSection, now }: { project?: string; query?: string; section?: string | null; sessionID?: string | null; days?: number | null; limit?: number; maxSnippetChars?: number; fullSection?: boolean; now?: number } = {}) {
+    search({ project, query, scope = 'project', recent = false, section, sessionID, days, limit, maxSnippetChars: snip, fullSection, now }: { project?: string; query?: string; scope?: 'project' | 'all'; recent?: boolean; section?: string | null; sessionID?: string | null; days?: number | null; limit?: number; maxSnippetChars?: number; fullSection?: boolean; now?: number } = {}) {
       if (closed) throw new Error('store closed');
+      const scopeMode = scope === 'all' ? 'all' : 'project';
       let wanted = null;
       if (section !== undefined && section !== null) {
         wanted = normalizeSection(section);
@@ -670,13 +692,50 @@ export function openMemoryStore({
         }
         windowMs = Math.min(retentionMs, days * DAY_MS);
       }
-      if (typeof project !== 'string' || !project) return [];
-      const match = buildMatchQuery(query);
-      if (!match) return [];
-      const maxAllowedLimit = maxResults !== undefined ? defaultLimit : 20;
+      if (scopeMode === 'project' && (typeof project !== 'string' || !project)) return [];
+      const maxAllowedLimit = hasExplicitMaxResults ? defaultLimit : 20;
       const lim = clampInt(limit, defaultLimit, 1, maxAllowedLimit);
       const sn = fullSection === true ? 2400 : clampInt(snip, defaultSnippet, 20, defaultSnippet);
       const cutoff = (Number.isFinite(Number(now)) ? Number(now) : Date.now()) - windowMs;
+      if (recent === true) {
+        const rawRows = (scopeMode === 'all'
+          ? recentAllStmt.all(cutoff, Math.min(200, lim * 10))
+          : recentProjectStmt.all(project as string, cutoff, Math.min(200, lim * 10))) as any[];
+        const picked: any[] = [];
+        for (const row of rawRows) {
+          if (wantSession && row.session_id !== wantSession) continue;
+          let found: string | null = null;
+          let snippet: string;
+          if (wanted) {
+            const range = parseSections(row.text).get(wanted);
+            if (range) {
+              found = wanted;
+              snippet = row.text.slice(range.start, range.end).trim().slice(0, sn);
+            } else {
+              snippet = makeSnippet(row.text, '', sn);
+            }
+          } else {
+            snippet = makeSnippet(row.text, '', sn);
+          }
+          const out: Record<string, any> = {
+            event_id: row.event_id,
+            project: row.project,
+            session_id: row.session_id,
+            model: row.model,
+            reason: row.reason,
+            created_at: row.created_at,
+            date: new Date(row.created_at).toISOString(),
+            rank: 0,
+            snippet,
+          };
+          if (wanted) out.section = found;
+          picked.push(out);
+          if (picked.length >= lim) break;
+        }
+        return picked;
+      }
+      const match = buildMatchQuery(query);
+      if (!match) return [];
       const tokens = queryTokens(query);
       const scored = [];
       // All searches page through BM25-ordered candidates until a hard work ceiling (SCAN_MAX_ROWS rows or
@@ -692,7 +751,9 @@ export function openMemoryStore({
       try {
         scan: for (let offset = 0; scannedRows < maxRows; offset += batch) {
           const want = Math.min(batch, maxRows - scannedRows);
-          const page = searchPageStmt.all(match, project, cutoff, want, offset) as any[];
+          const page = (scopeMode === 'all'
+            ? searchAllPageStmt.all(match, cutoff, want, offset)
+            : searchPageStmt.all(match, project as string, cutoff, want, offset)) as any[];
           for (const row of page) {
             // Strict char ceiling: a row that would cross it is not processed.
             if (scannedChars + row.text.length > SCAN_MAX_CHARS) break scan;
@@ -744,6 +805,52 @@ export function openMemoryStore({
         if (wanted) out.section = found;
         return out;
       });
+    },
+
+    /**
+     * Build a compact, deterministic <recent_work> summary block from the latest distinct archived
+     * sessions for this project (within retention). Safe to freeze per session for prompt-cache stability.
+     */
+    recentWork({ project: targetProject, limit = 5, maxChars = 1800, now = Date.now() }: { project?: string; limit?: number; maxChars?: number; now?: number } = {}): string | null {
+      if (closed) throw new Error('store closed');
+      if (typeof targetProject !== 'string' || !targetProject) return null;
+      const lim = clampInt(limit, 5, 1, 10);
+      const cap = clampInt(maxChars, 1800, 200, 4000);
+      const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+      const rows = recentProjectStmt.all(targetProject, t - retentionMs, lim * 6) as any[];
+      if (!rows.length) return null;
+      const seenSessions = new Set<string>();
+      const lines: string[] = [
+        '<recent_work>',
+        'Recent archived sessions for this project (read-only context; call trim_history_search for details):',
+      ];
+      let used = lines[0].length + lines[1].length + 20;
+      for (const row of rows) {
+        const sk = row.session_id ? `s:${row.session_id}` : `e:${row.event_id}`;
+        if (seenSessions.has(sk)) continue;
+        seenSessions.add(sk);
+        const sections = parseSections(row.text);
+        const objRange = sections.get('objective');
+        const rawExcerpt = objRange
+          ? row.text.slice(objRange.start, objRange.end)
+          : row.text;
+        const clean = rawExcerpt
+          .replace(/<\/?recent_work>/gi, '')
+          .replace(/[\x00-\x1f\x7f]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 220);
+        if (!clean) continue;
+        const date = new Date(row.created_at).toISOString().slice(0, 10);
+        const line = `- [${date}] session ${row.session_id ?? '?'}: ${clean}`;
+        if (used + line.length + 1 > cap) break;
+        lines.push(line);
+        used += line.length + 1;
+        if (seenSessions.size >= lim) break;
+      }
+      if (lines.length <= 2) return null;
+      lines.push('</recent_work>');
+      return lines.join('\n');
     },
 
     /** Archived summaries for one project that are still inside retention; never reads other projects. */

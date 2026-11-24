@@ -19,7 +19,7 @@ function newState(at) {
         context: null,
         compaction: {
             seen: false, running: false, autoEvents: 0, manualEvents: 0, failedEvents: 0, lastAt: null, lastReason: null,
-            beforeTokens: null, beforeChars: null, afterTokens: null, afterChars: null, awaitingAfter: false,
+            beforeTokens: null, beforeChars: null, afterTokens: null, afterChars: null, afterRatio: null, verification: null, awaitingAfter: false,
         },
         memory: { searches: 0, searchResults: 0 },
     };
@@ -187,6 +187,7 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
                     known: true, estimatedTokens: c.estimatedTokens, estimatedChars: c.estimatedChars, usableTokens: c.usableTokens,
                     limitTokens: c.limitTokens, ratio: c.ratio, source: c.source, media: c.media, at: c.at,
                     ...(c.breakdown ? { breakdown: c.breakdown } : {}),
+                    ...(c.diagnostics ? { diagnostics: c.diagnostics } : {}),
                 }
                 : { known: false, estimatedTokens: null, estimatedChars: null, usableTokens: null, limitTokens: null, ratio: null, source: null, media: null, at: null },
             shell: feature(s?.shell ?? { runs: 0, changed: 0, savedChars: 0 }, !!o.shell),
@@ -204,6 +205,8 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
                 beforeChars: k?.beforeChars ?? null, afterChars: k?.afterChars ?? null,
                 reducedChars: bothChars ? k.beforeChars - k.afterChars : null,
                 reducedRatio: bothChars && k.beforeChars > 0 ? (k.beforeChars - k.afterChars) / k.beforeChars : null,
+                ...(k?.afterRatio !== null && k?.afterRatio !== undefined ? { afterRatio: k.afterRatio } : {}),
+                ...(k?.verification !== null && k?.verification !== undefined ? { verification: k.verification } : {}),
             },
             memory,
         };
@@ -231,7 +234,7 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
                 }
             });
         },
-        recordContext({ sessionID, estimatedTokens, estimatedChars, usableTokens, limitTokens, ratio, source, media, breakdown } = {}) {
+        recordContext({ sessionID, estimatedTokens, estimatedChars, usableTokens, limitTokens, ratio, source, media, breakdown, diagnostics } = {}) {
             return mutate(sessionID, (s) => {
                 const at = clock();
                 const bd = breakdown && typeof breakdown === 'object'
@@ -241,17 +244,47 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
                         toolChars: intOf(breakdown.toolChars) ?? 0,
                     }
                     : null;
+                const diag = diagnostics && typeof diagnostics === 'object'
+                    ? {
+                        toolSchemaChars: intOf(diagnostics.toolSchemaChars) ?? 0,
+                        toolCount: intOf(diagnostics.toolCount) ?? 0,
+                        topTools: Array.isArray(diagnostics.topTools)
+                            ? diagnostics.topTools
+                                .slice(0, 3)
+                                .filter((t) => t && typeof t.name === 'string' && /^[a-z0-9_.:-]{1,32}$/i.test(t.name) && (intOf(t.chars) ?? 0) > 0)
+                                .map((t) => ({ name: t.name.toLowerCase(), chars: intOf(t.chars) ?? 0 }))
+                            : [],
+                    }
+                    : null;
                 s.context = {
                     estimatedTokens: intOf(estimatedTokens), estimatedChars: intOf(estimatedChars), usableTokens: intOf(usableTokens),
                     limitTokens: intOf(limitTokens), ratio: numOf(ratio), source: SOURCES.has(source) ? source : null,
                     media: typeof media === 'boolean' ? media : null, at,
                     ...(bd ? { breakdown: bd } : {}),
+                    ...(diag ? { diagnostics: diag } : {}),
                 };
                 const k = s.compaction;
                 if (k.awaitingAfter) {
                     k.awaitingAfter = false;
                     k.afterTokens = s.context.estimatedTokens;
                     k.afterChars = s.context.estimatedChars;
+                    k.afterRatio = s.context.ratio;
+                    const forceBand = numOf(options?.pressureForceRatio) ?? 0.85;
+                    if (k.beforeTokens !== null && k.afterTokens !== null && k.afterTokens >= k.beforeTokens) {
+                        k.verification = 'grew';
+                    }
+                    else if (k.afterRatio !== null && k.afterRatio >= forceBand) {
+                        k.verification = 'under-reduced';
+                    }
+                    else if (k.beforeTokens !== null && k.afterTokens !== null && k.beforeTokens > 0 && (k.beforeTokens - k.afterTokens) / k.beforeTokens < 0.15) {
+                        k.verification = 'under-reduced';
+                    }
+                    else if (k.afterTokens !== null) {
+                        k.verification = 'effective';
+                    }
+                    else {
+                        k.verification = null;
+                    }
                 }
             });
         },
@@ -283,6 +316,8 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
                     k.beforeChars = s.context?.estimatedChars ?? null;
                     k.afterTokens = null;
                     k.afterChars = null;
+                    k.afterRatio = null;
+                    k.verification = null;
                     return;
                 }
                 k.running = false;

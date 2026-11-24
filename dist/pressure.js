@@ -145,6 +145,15 @@ export function estimateRequest(event, modelLimits, options, native) {
         systemChars += text.length;
         estimatedTokens += estimateTokens(text);
     }
+    const toolCharsByName = new Map();
+    const SAFE_TOOL_NAME = /^[a-z0-9_.:-]{1,32}$/i;
+    const addToolChars = (rawName, chars) => {
+        if (chars <= 0)
+            return;
+        const raw = typeof rawName === 'string' ? rawName.trim().toLowerCase() : '';
+        const key = raw && SAFE_TOOL_NAME.test(raw) ? raw : 'tool';
+        toolCharsByName.set(key, (toolCharsByName.get(key) ?? 0) + chars);
+    };
     for (const msg of event?.messages ?? []) {
         prunedCharsSoFar += getPrunedMsgChars(msg);
         let msgTokens = 12;
@@ -161,8 +170,10 @@ export function estimateRequest(event, modelLimits, options, native) {
         if (typeof content === 'string') {
             const text = content.slice(0, 600_000);
             estimatedChars += text.length;
-            if (isToolMsg)
+            if (isToolMsg) {
                 toolChars += text.length;
+                addToolChars(msg?.tool ?? msg?.name ?? role, text.length);
+            }
             else if (isSysMsg)
                 systemChars += text.length;
             else
@@ -177,8 +188,10 @@ export function estimateRequest(event, modelLimits, options, native) {
                     mediaPresent = true;
                 const text = limitedStringify(part);
                 estimatedChars += text.length;
-                if (isToolMsg || isToolPart(part))
+                if (isToolMsg || isToolPart(part)) {
                     toolChars += text.length;
+                    addToolChars(part.tool ?? part.name ?? msg?.tool ?? role, text.length);
+                }
                 else if (isSysMsg)
                     systemChars += text.length;
                 else
@@ -208,12 +221,21 @@ export function estimateRequest(event, modelLimits, options, native) {
             trailingAfterReported += msgTokens;
         }
     }
+    let toolSchemaChars = 0;
+    let toolCount = 0;
     for (const [name, tool] of Object.entries(event?.tools ?? {})) {
+        toolCount++;
         const text = limitedStringify(tool);
-        estimatedChars += name.length + text.length;
-        systemChars += name.length + text.length;
+        const len = name.length + text.length;
+        toolSchemaChars += len;
+        estimatedChars += len;
+        systemChars += len;
         estimatedTokens += estimateTokens(name) + estimateTokens(text);
     }
+    const topTools = [...toolCharsByName.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 3)
+        .map(([name, chars]) => ({ name, chars }));
     const reportedTokens = lastReportedBase !== undefined ? lastReportedBase + trailingAfterReported : undefined;
     // Real counts for the latest assistant step are authoritative (they match the OpenCode screen); the byte estimate
     // is only a floor for provider counts embedded in messages and the fallback when no real count exists.
@@ -226,7 +248,8 @@ export function estimateRequest(event, modelLimits, options, native) {
     const usable = context && context > reserve ? context - reserve : undefined;
     const ratio = usable ? effectiveTokens / usable : undefined;
     const out = { estimatedTokens, estimatedChars, modelContext: context, modelSource: model.source, usableTokens: usable,
-        ratio, estimated: true, mediaPresent, effectiveTokens, breakdown: { systemChars, chatChars, toolChars } };
+        ratio, estimated: true, mediaPresent, effectiveTokens, breakdown: { systemChars, chatChars, toolChars },
+        diagnostics: { toolSchemaChars, toolCount, topTools } };
     if (reportedTokens !== undefined)
         out.reportedTokens = reportedTokens;
     return out;

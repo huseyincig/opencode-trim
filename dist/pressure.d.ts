@@ -15,6 +15,15 @@ export interface ContextBreakdown {
     chatChars: number;
     toolChars: number;
 }
+export interface ToolBloatEntry {
+    name: string;
+    chars: number;
+}
+export interface ContextDiagnostics {
+    toolSchemaChars: number;
+    toolCount: number;
+    topTools: ToolBloatEntry[];
+}
 export interface PressureEstimate {
     estimatedTokens: number;
     estimatedChars: number;
@@ -28,6 +37,7 @@ export interface PressureEstimate {
     /** Token count the ratio is based on: real provider tokens when available, else the byte estimate. */
     effectiveTokens: number;
     breakdown?: ContextBreakdown;
+    diagnostics?: ContextDiagnostics;
 }
 export declare function recordPrunedMsgChars(msg: unknown, deltaChars: number): void;
 export declare function getPrunedMsgChars(msg: unknown): number;

@@ -37,6 +37,18 @@ export function normalizeSnapshot(raw: any): any {
         toolChars: Math.max(0, n(c.breakdown.toolChars) ?? 0),
       }
     : null
+  const diag = isObj(c.diagnostics)
+    ? {
+        toolSchemaChars: Math.max(0, n(c.diagnostics.toolSchemaChars) ?? 0),
+        toolCount: Math.max(0, n(c.diagnostics.toolCount) ?? 0),
+        topTools: Array.isArray(c.diagnostics.topTools)
+          ? c.diagnostics.topTools
+              .slice(0, 3)
+              .filter((t: any) => isObj(t) && typeof t.name === "string" && (n(t.chars) ?? 0) > 0)
+              .map((t: any) => ({ name: safeText(t.name, 24) ?? "tool", chars: Math.max(0, n(t.chars) ?? 0) }))
+          : [],
+      }
+    : null
   return {
     version: n(raw.version),
     now: n(raw.now),
@@ -48,7 +60,7 @@ export function normalizeSnapshot(raw: any): any {
       autoCompact: b(e.autoCompact),
       thresholds: { start: n(th.start), force: n(th.force), critical: n(th.critical) },
     },
-    context: { known: b(c.known) === true, estimatedTokens: n(c.estimatedTokens), estimatedChars: n(c.estimatedChars), usableTokens: n(c.usableTokens), limitTokens: n(c.limitTokens), ratio: n(c.ratio), source: safeText(c.source), media: b(c.media), at: n(c.at), breakdown: bd },
+    context: { known: b(c.known) === true, estimatedTokens: n(c.estimatedTokens), estimatedChars: n(c.estimatedChars), usableTokens: n(c.usableTokens), limitTokens: n(c.limitTokens), ratio: n(c.ratio), source: safeText(c.source), media: b(c.media), at: n(c.at), breakdown: bd, diagnostics: diag },
     shell: { known: b(sh.known) === true, runs: n(sh.runs), changed: n(sh.changed), savedChars: n(sh.savedChars) },
     filtering: { known: b(f.known) === true, runs: n(f.runs), changed: n(f.changed), savedChars: n(f.savedChars) },
     pruning: { known: b(p.known) === true, calls: n(p.calls), drops: n(p.drops), removedChars: n(p.removedChars), lastReason: safeText(p.lastReason), lastAt: n(p.lastAt), allowNewDrops: b(p.allowNewDrops) },
@@ -57,6 +69,7 @@ export function normalizeSnapshot(raw: any): any {
       known: b(co.known) === true, running: b(co.running), autoEvents: n(co.autoEvents), manualEvents: n(co.manualEvents), failedEvents: n(co.failedEvents),
       lastAt: n(co.lastAt), lastReason: safeText(co.lastReason, 10), beforeTokens: n(co.beforeTokens), afterTokens: n(co.afterTokens), reducedTokens: n(co.reducedTokens),
       beforeChars: n(co.beforeChars), afterChars: n(co.afterChars), reducedChars: n(co.reducedChars), reducedRatio: n(co.reducedRatio),
+      afterRatio: n(co.afterRatio), verification: safeText(co.verification, 16),
     },
     memory: {
       enabled: b(m.enabled), active: b(m.active), error: m.error === null || m.error === undefined || m.error === false ? null : safeText(typeof m.error === "string" ? m.error : "error", 20) ?? "error",
@@ -158,7 +171,7 @@ function totalSaved(snap: any): number | null {
   return any ? sum : null
 }
 
-export const TRIM_VERSION = "0.10.2"
+export const TRIM_VERSION = "0.11.0"
 
 export const SECTION_TITLES: Record<string, string> = { context: "Context", optimization: "Optimization", compaction: "Compaction", memory: "Memory" }
 
@@ -284,7 +297,7 @@ export function collapsedSummary(raw: any, { stale = false, nativeTokens = null,
   return `+ trim ${collapsedMetrics(raw, { nativeTokens, nativeLimitTokens })}${stale ? "!" : ""}`
 }
 
-// Compact StatRow items for collapsed sidebar view (matches opencode-guardian sidebar quality).
+// Compact StatRow items for collapsed sidebar view.
 export function buildCollapsedRows(raw: any, options: any = {}): any[] {
   const snap = normalizeSnapshot(raw)
   const native = nativeOf(options)
@@ -831,6 +844,42 @@ export function buildGainReport(raw: any, now: number = Date.now(), options: any
     lines.push(`Composition (est): sys ${model.composition.sysText} | chat ${model.composition.chatText} | tools ${model.composition.toolsText}`)
   }
   if (snap) {
+    const diag = snap.context.diagnostics
+    const bd = snap.context.breakdown
+    if (diag && Array.isArray(diag.topTools) && diag.topTools.length > 0) {
+      const toolDenom = Math.max(1, bd?.toolChars ?? diag.topTools.reduce((a: number, t: any) => a + t.chars, 0))
+      const topParts = diag.topTools.map((t: any) => `${t.name} ${Math.round((t.chars / toolDenom) * 100)}% (${fmtChars(t.chars)})`)
+      lines.push(`Top tools: ${topParts.join(" | ")}`)
+    }
+    const sysChars = bd?.systemChars ?? 0
+    const schemaChars = diag?.toolSchemaChars ?? 0
+    const toolCount = diag?.toolCount ?? 0
+    const sysTok = Math.round(sysChars / 3)
+    const schemaTok = Math.round(schemaChars / 3)
+    const budgetTok = snap.context.usableTokens ?? snap.context.limitTokens
+    const sysPct = budgetTok && budgetTok > 0 ? Math.round((sysTok / budgetTok) * 100) : null
+    if (sysTok >= 15000 || (sysPct !== null && sysPct >= 20)) {
+      const pctStr = sysPct !== null ? `${sysPct}% of budget; ` : ""
+      lines.push(`Overhead alert: system+tools ~${fmtCount(sysTok)} tok (${pctStr}${fmtCount(toolCount)} tool schemas ~${fmtCount(schemaTok)} tok)`)
+    } else if (toolCount > 0 && sysTok > 0) {
+      lines.push(`Overhead: system+tools ~${fmtCount(sysTok)} tok (${fmtCount(toolCount)} tool schemas ~${fmtCount(schemaTok)} tok)`)
+    }
+    const ver = snap.compaction.verification
+    if (ver) {
+      const bt = snap.compaction.beforeTokens
+      const at = snap.compaction.afterTokens
+      const pair = bt !== null && at !== null ? `${fmtCount(bt)} -> ${fmtCount(at)}` : ""
+      if (ver === "effective") {
+        const dropPct = bt && bt > 0 && at !== null ? `-${Math.round(((bt - at) / bt) * 100)}%` : ""
+        const detail = [dropPct, pair].filter(Boolean).join(", ")
+        lines.push(`Compaction check: effective${detail ? ` (${detail})` : ""}`)
+      } else if (ver === "under-reduced") {
+        const ar = snap.compaction.afterRatio !== null ? `, still ${Math.round(snap.compaction.afterRatio * 100)}%` : ""
+        lines.push(`Compaction check: WARNING under-reduced (${pair}${ar})`)
+      } else if (ver === "grew") {
+        lines.push(`Compaction check: WARNING grew (${pair})`)
+      }
+    }
     const sh = snap.shell.known ? `${fmtCount(snap.shell.runs ?? 0)} runs (-${fmtChars(snap.shell.savedChars ?? 0)} chars)` : "off"
     const fi = snap.filtering.known ? `${fmtCount(snap.filtering.runs ?? 0)} runs (-${fmtChars(snap.filtering.savedChars ?? 0)} chars)` : "off"
     const pr = snap.pruning.known ? `${fmtCount(snap.pruning.drops ?? 0)} drops (-${fmtChars(snap.pruning.removedChars ?? 0)} chars)` : "off"

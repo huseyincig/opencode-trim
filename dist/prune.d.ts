@@ -1,3 +1,21 @@
+export interface CacheBreakEvenInput {
+    savedChars: number;
+    remainingChars: number;
+    isColdCache: boolean;
+    isCritical: boolean;
+    minSavingsChars?: number;
+    expectedTurns?: number;
+    writeOverheadRatio?: number;
+}
+/**
+ * Economic break-even check for warm prompt-cache invalidation.
+ * Cold caches and critical pressure always pass; warm caches require savedChars to beat
+ * both a floor (minSavingsChars) and the amortized rewrite penalty across expectedTurns.
+ */
+export declare function evaluateCacheBreakEven(input: CacheBreakEvenInput): {
+    allow: boolean;
+    reason: string;
+};
 export interface ReduceDirective {
     scope: 'older_tools' | 'target';
     target?: string;
@@ -13,6 +31,7 @@ export interface PruneResult {
     eligibleChars?: number;
     estimatedContextRatio?: number;
     consumedDirectives?: boolean;
+    warmCacheDeferred?: boolean;
 }
 export interface PruneVaultAdapter {
     store: (refId: string, entry: any, sessionID?: string) => boolean;
@@ -33,6 +52,11 @@ declare function data(o: any, k: string): any;
 export { data as ownData };
 declare function isArr(x: unknown): x is any[];
 export { isArr as isPlainArray };
+/**
+ * Deterministic message key for OpenCode V2 Prompt.Message objects that may omit `msg.id`.
+ * Never hashes mutable tool outputs, so the key stays invariant before and after pruning.
+ */
+export declare function stableMessageKey(msg: any): string;
 /** Shell commands whose output may carry instructions, secrets or patches: never pruned. */
 export declare function protectedShell(cmd: unknown): boolean;
 /** Default number of lines a read returns when no limit/endLine is given. */

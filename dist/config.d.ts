@@ -8,6 +8,7 @@ export interface TrimMemoryOptions {
     readonly agentAllowlist: readonly string[];
     readonly agentDenylist: readonly string[];
     readonly retentionDays: number;
+    recentWork?: boolean;
     dbPath?: string;
 }
 export interface TrimTuiOptions {
@@ -47,6 +48,8 @@ export interface TrimOptions {
     readonly pruneUnrelatedDiagnostics: boolean;
     readonly prunePreviewLines: number;
     readonly dedupeWindow: number;
+    readonly cacheTtlMs: number;
+    readonly cacheMinSavingsChars: number;
     readonly filterRules: readonly FilterRule[];
     readonly memory: TrimMemoryOptions;
     readonly tui: TrimTuiOptions;
@@ -84,6 +87,8 @@ export declare const DEFAULTS: Readonly<{
     pruneUnrelatedDiagnostics: true;
     prunePreviewLines: 0;
     dedupeWindow: 0;
+    cacheTtlMs: 300000;
+    cacheMinSavingsChars: 6000;
     filterRules: never[];
     memory: Readonly<{
         enabled: false;

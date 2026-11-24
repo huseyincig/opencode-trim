@@ -500,6 +500,9 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     return input+Math.max(0,read);
   };
   const rememberNative=(sid: string, id: unknown, tokens: unknown)=>{
+    if(obj(tokens)&&obj((tokens as any).cache)&&typeof (tokens as any).cache.read==='number'&&Number.isFinite((tokens as any).cache.read)){
+      cache.observeCacheRead(sid,Math.max(0,(tokens as any).cache.read));
+    }
     const total=nativeTokensOf(tokens);
     if(typeof id!=='string'||!id||total===undefined)return;
     nativeBySession.delete(sid);
@@ -507,6 +510,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     nativeBySession.set(sid,{id,tokens:total});
   };
   let activeVault: any = null;
+  let forgetMemorySession: ((sid: string) => void) | null = null;
   const registrations: Array<{ dispose: () => any }> = [];
   const sessionOf=(event: any): string | undefined => {const s=event?.sessionID;return typeof s==='string'&&s?s:undefined;};
   const observe=(fn: (s: any) => void): void => {if(!stats)return;try{fn(stats);}catch{/* never affect the engine */}};
@@ -536,7 +540,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   const contextStats=(event: any, pressure: any)=>observe((s: any)=>s.recordContext({
     sessionID:sessionOf(event),estimatedTokens:typeof pressure.effectiveTokens==='number'?pressure.effectiveTokens:pressure.reportedTokens!==undefined?Math.max(pressure.estimatedTokens,pressure.reportedTokens):pressure.estimatedTokens,estimatedChars:pressure.estimatedChars,
     usableTokens:pressure.usableTokens,limitTokens:pressure.modelContext,ratio:pressure.ratio,
-    source:pressure.modelSource,media:pressure.mediaPresent,breakdown:pressure.breakdown}));
+    source:pressure.modelSource,media:pressure.mediaPresent,breakdown:pressure.breakdown,diagnostics:pressure.diagnostics}));
   const runPruning=async(event: any, kind: string): Promise<void> => {
     if(!opts.pruning||foreignEvent(event))return;
     try{
@@ -568,9 +572,9 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
       const pendingDirectives=sid&&kind==='context'?reduceQueue.get(sid):undefined;
       const forceApplyNow=!!pendingDirectives?.some((d)=>d.applyNow===true);
       const effectiveGate=forceApplyNow?{...gate,allowNewDrops:true}:gate;
-      const result=pruneContext(event,opts,{pressure,...effectiveGate,...(pendingDirectives?.length?{reduceDirectives:pendingDirectives}:{}),...(activeVault?{vault:activeVault}:{})});
+      const result=pruneContext(event,opts,{pressure,...effectiveGate,directory:localDir,...(pendingDirectives?.length?{reduceDirectives:pendingDirectives}:{}),...(activeVault?{vault:activeVault}:{})});
       if(sid&&result.consumedDirectives)reduceQueue.delete(sid);
-      gate.finish(result.plannedIds);
+      gate.finish(result.plannedIds,{deferred:result.warmCacheDeferred===true});
       const postPressure=(kind==='context'&&result.pruned>0)?estimateRequest(event,modelLimits,opts,nativeInfo):pressure;
       if(sid&&kind==='context'){
         appliedChars.delete(sid);
@@ -646,6 +650,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     autoCompactState.delete(sid);
     reduceQueue.delete(sid);
     nativeBySession.delete(sid);appliedChars.delete(sid);nativeSeeded.delete(sid);
+    try{forgetMemorySession?.(sid);}catch{/* ignore */}
   };
   registrations.push({
     dispose:registerMeshPeer({
@@ -824,8 +829,9 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     // Memory is optional; a failure must not disable Trim itself.
     try{
       memoryStop=await setupMemory(ctx,opts,{
-        onReady:({project,store,dbPath,vault}: any)=>{
+        onReady:({project,store,dbPath,vault,forgetSession}: any)=>{
           activeVault=vault??null;
+          forgetMemorySession=typeof forgetSession==='function'?forgetSession:null;
           if(stats){
             stats.setMemoryProvider((sid?: string)=>({
               ...(typeof store.sidebarStats==='function'?store.sidebarStats(project,sid):store.stats(project)),
@@ -837,6 +843,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
         onSearch:({sessionID,results}: any)=>stats?.recordMemorySearch({sessionID,results:Array.isArray(results)?results.length:0}),
         onClose:()=>{
           activeVault=null;
+          forgetMemorySession=null;
           if(stats){stats.setMemoryProvider(null);stats.setMemoryState({active:false});}
         },
         onCompactionEnded:(sid: string)=>{

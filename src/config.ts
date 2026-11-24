@@ -10,6 +10,7 @@ export interface TrimMemoryOptions {
   readonly agentAllowlist: readonly string[];
   readonly agentDenylist: readonly string[];
   readonly retentionDays: number;
+  recentWork?: boolean;
   dbPath?: string;
 }
 export interface TrimTuiOptions {
@@ -49,6 +50,8 @@ export interface TrimOptions {
   readonly pruneUnrelatedDiagnostics: boolean;
   readonly prunePreviewLines: number;
   readonly dedupeWindow: number;
+  readonly cacheTtlMs: number;
+  readonly cacheMinSavingsChars: number;
   readonly filterRules: readonly FilterRule[];
   readonly memory: TrimMemoryOptions;
   readonly tui: TrimTuiOptions;
@@ -87,6 +90,8 @@ export const DEFAULTS = Object.freeze({
   pruneUnrelatedDiagnostics: true,
   prunePreviewLines: 0,
   dedupeWindow: 0,
+  cacheTtlMs: 300_000,
+  cacheMinSavingsChars: 6000,
   filterRules: [],
   memory: Object.freeze({ enabled: false, agentAllowlist: Object.freeze([]), agentDenylist: Object.freeze([]), retentionDays: 90 }),
   tui: Object.freeze({ enabled: false }),
@@ -100,13 +105,14 @@ function validateTui(input: any): TrimTuiOptions {
   if (typeof t.enabled !== 'boolean') throw new TypeError('opencode-trim: tui.enabled must be boolean');
   return Object.freeze({ enabled: t.enabled });
 }
-const MEMORY_KEYS = ['enabled', 'agentAllowlist', 'agentDenylist', 'retentionDays', 'dbPath'];
+const MEMORY_KEYS = ['enabled', 'agentAllowlist', 'agentDenylist', 'retentionDays', 'recentWork', 'dbPath'];
 function validateMemory(input: any): TrimMemoryOptions {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('opencode-trim: memory must be an object');
   const unknown = Object.keys(input).filter(k => !MEMORY_KEYS.includes(k));
   if (unknown.length) throw new Error(`opencode-trim: unknown memory options: ${unknown.join(', ')}`);
   const m = { ...DEFAULTS.memory, ...input };
   if (typeof m.enabled !== 'boolean') throw new TypeError('opencode-trim: memory.enabled must be boolean');
+  if (input.recentWork !== undefined && typeof input.recentWork !== 'boolean') throw new TypeError('opencode-trim: memory.recentWork must be boolean');
   if (!Number.isSafeInteger(m.retentionDays) || m.retentionDays < 1 || m.retentionDays > 3650)
     throw new TypeError('opencode-trim: memory.retentionDays outside 1..3650');
   for (const k of ['agentAllowlist', 'agentDenylist']) {
@@ -118,7 +124,8 @@ function validateMemory(input: any): TrimMemoryOptions {
     throw new TypeError('opencode-trim: memory.dbPath must be a non-empty string');
   if (m.dbPath !== undefined && m.dbPath !== ':memory:' && !isAbsolute(m.dbPath))
     throw new TypeError('opencode-trim: memory.dbPath must be an absolute path or ":memory:"');
-  const out: { enabled: boolean; agentAllowlist: readonly string[]; agentDenylist: readonly string[]; retentionDays: number; dbPath?: string } = { enabled: m.enabled, agentAllowlist: Object.freeze([...new Set<string>(m.agentAllowlist)]), agentDenylist: Object.freeze([...new Set<string>(m.agentDenylist)]), retentionDays: m.retentionDays };
+  const out: { enabled: boolean; agentAllowlist: readonly string[]; agentDenylist: readonly string[]; retentionDays: number; recentWork?: boolean; dbPath?: string } = { enabled: m.enabled, agentAllowlist: Object.freeze([...new Set<string>(m.agentAllowlist)]), agentDenylist: Object.freeze([...new Set<string>(m.agentDenylist)]), retentionDays: m.retentionDays };
+  if (input.recentWork !== undefined) out.recentWork = input.recentWork;
   if (m.dbPath !== undefined) out.dbPath = m.dbPath;
   return Object.freeze(out);
 }
@@ -129,6 +136,7 @@ const ranges = {
   pruneAfterToolChars: [10000, 2000000], pruneMinResultChars: [100, 200000],
   outputReserveTokens: [1024, 100000], contextWindow: [0, 10000000], contextWindowCap: [0, 10000000],
   supersessionMinChars: [100, 200000], prunePreviewLines: [0, 20], dedupeWindow: [0, 32],
+  cacheTtlMs: [0, 3_600_000], cacheMinSavingsChars: [0, 200_000],
 };
 const simpleTool = /^[a-z][a-z0-9_-]{0,63}$/i;
 const simpleProgram = /^[a-z0-9][a-z0-9_.-]{0,63}$/i;

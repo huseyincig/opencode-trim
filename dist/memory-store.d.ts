@@ -61,9 +61,11 @@ export declare function openMemoryStore({ dbPath, retentionDays, maxResults, max
     updateContextAfter(project: unknown, eventId: unknown, tokens: unknown): {
         updated: boolean;
     };
-    search({ project, query, section, sessionID, days, limit, maxSnippetChars: snip, fullSection, now }?: {
+    search({ project, query, scope, recent, section, sessionID, days, limit, maxSnippetChars: snip, fullSection, now }?: {
         project?: string;
         query?: string;
+        scope?: "project" | "all";
+        recent?: boolean;
         section?: string | null;
         sessionID?: string | null;
         days?: number | null;
@@ -71,7 +73,17 @@ export declare function openMemoryStore({ dbPath, retentionDays, maxResults, max
         maxSnippetChars?: number;
         fullSection?: boolean;
         now?: number;
-    }): Record<string, any>[];
+    }): any[];
+    /**
+     * Build a compact, deterministic <recent_work> summary block from the latest distinct archived
+     * sessions for this project (within retention). Safe to freeze per session for prompt-cache stability.
+     */
+    recentWork({ project: targetProject, limit, maxChars, now }?: {
+        project?: string;
+        limit?: number;
+        maxChars?: number;
+        now?: number;
+    }): string | null;
     /** Archived summaries for one project that are still inside retention; never reads other projects. */
     stats(statsProject: unknown, now?: number): {
         summaries: number;
