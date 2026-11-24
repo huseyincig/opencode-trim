@@ -8,7 +8,7 @@ const tsx = readFileSync(new URL("src/tui.tsx", root), "utf8")
 const peers = ["@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"]
 
 test("package exposes ./tui and keeps existing exports", () => {
-  assert.equal(pkg.version, "0.9.2")
+  assert.equal(pkg.version, "0.9.3")
   assert.deepEqual(pkg.exports["./tui"], { types: "./dist/tui.d.ts", default: "./dist/tui.js" })
   assert.deepEqual(pkg.exports["./rpc"], { types: "./dist/stats-rpc.d.ts", default: "./dist/stats-rpc.js" })
   for (const k of [".", "./core", "./prune", "./pressure"]) {
@@ -44,21 +44,24 @@ test("tui.tsx contract", () => {
   assert.doesNotMatch(tsx, /replace:\s*"/)
 })
 
-test("visual contract: borderless section, header toggle, label/value rows", () => {
+test("visual contract: borderless section, 3-mode header toggle, segmented bar, label/value rows", () => {
   assert.doesNotMatch(tsx, /\bborder\b|borderStyle|borderColor|backgroundColor|panelBg|padding/)
   assert.match(tsx, /<box flexDirection="column" flexShrink=\{0\} width="100%" gap=\{0\}>/)
   assert.match(tsx, /onMouseUp=\{toggle\}/)
   assert.match(tsx, /justifyContent="space-between"/)
-  assert.match(tsx, /buildCollapsedRows\(/)
-  assert.match(tsx, /buildSections\(/)
+  assert.match(tsx, /buildSidebarModel\(/)
   assert.match(tsx, /buildHeader\(/)
+  assert.match(tsx, /SegmentedBar/)
   assert.match(tsx, /<b>Trim<\/b>/)
-  assert.match(tsx, /isExpanded\(\) \? "▼ " : "▶ "/)
+  assert.match(tsx, /"▼ "/)
+  assert.match(tsx, /"▶ "/)
+  assert.match(tsx, /sys/)
+  assert.match(tsx, /chat/)
+  assert.match(tsx, /tools/)
   assert.doesNotMatch(tsx, /row\.line/)
-  assert.doesNotMatch(tsx, /row\.bar|meter|"\["|"\]"/)
   assert.doesNotMatch(tsx, /"ctx"|"mem"/)
   assert.match(tsx, /\{row\.label\}/)
-  assert.match(tsx, /\{row\.value\}/)
+  assert.match(tsx, /row\.parts\.join\(" · "\)/)
   assert.match(tsx, /flexShrink=\{1\}/)
   assert.match(tsx, /wrapMode="none"/)
   assert.match(tsx, /onCleanup\(/)
@@ -92,12 +95,13 @@ test("tui sources avoid node: and server imports", () => {
   }
 })
 
-test("tui model and format sources are ASCII; tsx uses only disclosure glyphs", () => {
+test("tui model and format sources are ASCII; tsx uses only expected UI glyphs", () => {
   for (const f of ["src/tui-model.ts", "src/tui-format.ts"]) {
     assert.match(readFileSync(new URL(f, root), "utf8"), /^[\x09\x0a\x0d\x20-\x7e]*$/, f)
   }
+  const allowed = new Set(["▼", "▶", "█", "●", "·"])
   const nonAscii = [...tsx].filter((ch) => ch.charCodeAt(0) > 0x7e)
-  assert.ok(nonAscii.every((ch) => ch === "▼" || ch === "▶"), `unexpected non-ASCII: ${nonAscii.join("")}`)
+  assert.ok(nonAscii.every((ch) => allowed.has(ch)), `unexpected non-ASCII: ${nonAscii.join("")}`)
 })
 
 test("tui lifecycle: RPC-first probe, bounded hidden retries, single sync, location filter", () => {

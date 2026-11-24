@@ -239,10 +239,11 @@ export async function setupMemory(ctx, opts, hooks) {
     };
     try {
         const vault = {
-            store(refId, entry) {
+            store(refId, entry, sessionID) {
                 const target = entry?.input?.path ?? entry?.input?.filePath ?? entry?.input?.command ?? entry?.input?.pattern ?? '';
                 return store.saveVault({
                     project,
+                    session_id: typeof sessionID === 'string' && sessionID ? sessionID : null,
                     ref_id: refId,
                     tool: entry?.name ?? 'tool',
                     target: typeof target === 'string' ? target : '',

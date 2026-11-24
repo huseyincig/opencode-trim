@@ -141,11 +141,31 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
             memory.searches = s ? s.memory.searches : 0;
             memory.searchResults = s ? s.memory.searchResults : 0;
             try {
-                const m = memoryProvider?.();
+                const m = memoryProvider?.(id);
                 if (m && typeof m === 'object') {
                     memory.summaries = intOf(m.summaries);
                     memory.lastSummaryAt = numOf(m.lastSummaryAt);
                     memory.dbBytes = intOf(m.dbBytes);
+                    if ('vaultRefs' in m)
+                        memory.vaultRefs = intOf(m.vaultRefs);
+                    if ('vaultChars' in m)
+                        memory.vaultChars = intOf(m.vaultChars);
+                    if ('sessionCompactions' in m)
+                        memory.sessionCompactions = intOf(m.sessionCompactions);
+                    if ('sessionAutoCompactions' in m)
+                        memory.sessionAutoCompactions = intOf(m.sessionAutoCompactions);
+                    if ('sessionManualCompactions' in m)
+                        memory.sessionManualCompactions = intOf(m.sessionManualCompactions);
+                    if ('sessionLastCompactionAt' in m)
+                        memory.sessionLastCompactionAt = numOf(m.sessionLastCompactionAt);
+                    if ('sessionLastCompactionReason' in m)
+                        memory.sessionLastCompactionReason = reasonOf(m.sessionLastCompactionReason, COMPACTION_REASONS);
+                    if ('sessionFirstAt' in m)
+                        memory.sessionFirstAt = numOf(m.sessionFirstAt);
+                    if ('sessionVaultRefs' in m)
+                        memory.sessionVaultRefs = intOf(m.sessionVaultRefs);
+                    if ('sessionVaultChars' in m)
+                        memory.sessionVaultChars = intOf(m.sessionVaultChars);
                 }
             }
             catch { /* provider failure leaves nulls */ }
@@ -162,7 +182,11 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
                 thresholds: { start: numOf(o.pressureStartRatio), force: numOf(o.pressureForceRatio), critical: numOf(o.pressureCriticalRatio) },
             },
             context: c
-                ? { known: true, estimatedTokens: c.estimatedTokens, estimatedChars: c.estimatedChars, usableTokens: c.usableTokens, limitTokens: c.limitTokens, ratio: c.ratio, source: c.source, media: c.media, at: c.at }
+                ? {
+                    known: true, estimatedTokens: c.estimatedTokens, estimatedChars: c.estimatedChars, usableTokens: c.usableTokens,
+                    limitTokens: c.limitTokens, ratio: c.ratio, source: c.source, media: c.media, at: c.at,
+                    ...(c.breakdown ? { breakdown: c.breakdown } : {}),
+                }
                 : { known: false, estimatedTokens: null, estimatedChars: null, usableTokens: null, limitTokens: null, ratio: null, source: null, media: null, at: null },
             shell: feature(s?.shell ?? { runs: 0, changed: 0, savedChars: 0 }, !!o.shell),
             filtering: feature(s?.filtering ?? { runs: 0, changed: 0, savedChars: 0 }, !!o.toolFiltering),
@@ -206,13 +230,21 @@ export function createTrimStats({ options = {}, now = Date.now, emit, setTimeout
                 }
             });
         },
-        recordContext({ sessionID, estimatedTokens, estimatedChars, usableTokens, limitTokens, ratio, source, media } = {}) {
+        recordContext({ sessionID, estimatedTokens, estimatedChars, usableTokens, limitTokens, ratio, source, media, breakdown } = {}) {
             return mutate(sessionID, (s) => {
                 const at = clock();
+                const bd = breakdown && typeof breakdown === 'object'
+                    ? {
+                        systemChars: intOf(breakdown.systemChars) ?? 0,
+                        chatChars: intOf(breakdown.chatChars) ?? 0,
+                        toolChars: intOf(breakdown.toolChars) ?? 0,
+                    }
+                    : null;
                 s.context = {
                     estimatedTokens: intOf(estimatedTokens), estimatedChars: intOf(estimatedChars), usableTokens: intOf(usableTokens),
                     limitTokens: intOf(limitTokens), ratio: numOf(ratio), source: SOURCES.has(source) ? source : null,
                     media: typeof media === 'boolean' ? media : null, at,
+                    ...(bd ? { breakdown: bd } : {}),
                 };
                 const k = s.compaction;
                 if (k.awaitingAfter) {

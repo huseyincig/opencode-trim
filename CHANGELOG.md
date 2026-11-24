@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.3 — 2026-11-24
+
+- **Authoritative Real Provider Token Math (`session.step.ended`) (`src/plugin.ts`, `src/pressure.ts`)**:
+  - Subscribed the single event pump to `session.step.ended` to record real provider token usage (`input + cache.read`, matching the OpenCode screen 1:1) per `assistantMessageID`, with a one-time `ctx.session.context({ sessionID })` seed if no `step.ended` has arrived yet.
+  - Updated `estimateRequest()` to treat real provider token counts as authoritative for `effectiveTokens` and subtract only newly pruned characters (`prunedCharsSoFar - baselineChars`), preventing premature pruning/compaction caused by conservative byte/3 overestimation (e.g. `295.9k` real tokens vs. `350k` cap).
+  - Cleared `nativeBySession` and `appliedChars` on `session.compaction.ended` and `onCompactionEnded` to prevent stale pre-compaction baselines after compaction completes.
+- **3-Mode Segmented-Bar TUI Sidebar & DB Hydration (`src/tui.tsx`, `src/tui-model.ts`, `src/stats.ts`, `src/memory-store.ts`, `src/prune.ts`, `src/memory.ts`)**:
+  - Redesigned the borderless OpenTUI sidebar into 3 click-cycled modes (**Open / Default**, **Expanded / Detail**, and **Collapsed / Minimal**) with a color-coded `sys` / `chat` / `tools` segmented bar and `healthy` / `caution` / `critical` status indicator that respects both model limits and active `maxTokens` caps.
+  - Added single-pass `breakdown: { systemChars, chatChars, toolChars }` in `estimateRequest()` (with host `messageBreakdown()` fallback), persistent session age from host `SessionInfo.time.created`, and read-only `store.sidebarStats(project, sessionID)` aggregating real session compactions (`reason IS NULL OR reason IN ('auto', 'manual')`) and session/project `vault` savings across restarts.
+  - Populated `vault.session_id` when archiving pruned tool outputs via `vault.store(refId, entry, event?.sessionID)`.
+- **OpenCode `v2.4.1` Verification**:
+  - Verified against `@opencode/plugin@2.4.1`, `@opentui/core@0.9.9`, `@opentui/solid@0.9.9`, and `opencode v2.4.1`.
+  - **Verification**: **`527 / 527`** tests passing across 28 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
+
 ## 0.9.2 — 2026-11-23
 
 - **OpenCode `v2.4.0` Non-Blocking Startup & Hot-Reload Recovery (`src/tui.tsx`, `src/pressure.ts`)**:

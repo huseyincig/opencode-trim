@@ -1023,7 +1023,7 @@ export function pruneContext(event, options, settings = {}) {
                 if (!already || !vault.has(refId)) {
                     if (newDrops) {
                         try {
-                            vault.store(refId, e);
+                            vault.store(refId, e, event?.sessionID);
                         }
                         catch { /* best-effort vault store */ }
                     }

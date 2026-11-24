@@ -175,10 +175,11 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
   };
   try {
     const vault = {
-      store(refId: string, entry: any): boolean {
+      store(refId: string, entry: any, sessionID?: string): boolean {
         const target = entry?.input?.path ?? entry?.input?.filePath ?? entry?.input?.command ?? entry?.input?.pattern ?? '';
         return store.saveVault({
           project,
+          session_id: typeof sessionID === 'string' && sessionID ? sessionID : null,
           ref_id: refId,
           tool: entry?.name ?? 'tool',
           target: typeof target === 'string' ? target : '',

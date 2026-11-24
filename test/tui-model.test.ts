@@ -1,6 +1,26 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { buildCollapsedRows, buildHeader, buildRows, buildSections, collapsedSummary, compactionHistory, deriveCachePolicy, headerText, isStale, normalizeEventSessionID, nativeContextTokens, normalizeSnapshot, STORAGE_KEY } from "../src/tui-model.ts"
+import {
+  buildCollapsedRows,
+  buildHeader,
+  buildRows,
+  buildSections,
+  buildSidebarModel,
+  collapsedSummary,
+  compactionBreakdown,
+  compactionHistory,
+  computeBarSegments,
+  deriveCachePolicy,
+  headerText,
+  isStale,
+  messageBreakdown,
+  nativeContextTokens,
+  nextViewMode,
+  normalizeEventSessionID,
+  normalizeSnapshot,
+  normalizeViewMode,
+  STORAGE_KEY,
+} from "../src/tui-model.ts"
 import { isAscii } from "../src/tui-format.ts"
 
 const NOW = 1_000_000
@@ -196,8 +216,8 @@ test("sections: ordered, only non-empty, label/value/tone/bar exposed", () => {
 })
 
 test("header: title with version, summary only collapsed, marker", () => {
-  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.9.2", summary: "68% | -106k | 12 | mem off", marker: "" })
-  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.9.2", summary: "", marker: "!" })
+  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.9.3", summary: "68% | -106k | 12 | mem off", marker: "" })
+  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.9.3", summary: "", marker: "!" })
   assert.equal(buildHeader(null).marker, "?")
   for (const h of [buildHeader(snap()), buildHeader(null, { expanded: true })]) assert.ok(isAscii(h.title + h.summary + h.marker))
 })
@@ -348,4 +368,120 @@ test('buildCollapsedRows: idle, context, savings and memory states', () => {
   assert.equal(active[1].tone, "success")
   assert.equal(active[2].label, "Memory")
   assert.equal(active[2].value, "4 summaries")
+})
+
+test("view mode normalization and 3-state cycling", () => {
+  assert.equal(normalizeViewMode(undefined), "default")
+  assert.equal(normalizeViewMode({ expanded: true }), "expanded")
+  assert.equal(normalizeViewMode({ expanded: false }), "default")
+  assert.equal(normalizeViewMode({ mode: "collapsed" }), "collapsed")
+  assert.equal(nextViewMode("default"), "expanded")
+  assert.equal(nextViewMode("expanded"), "collapsed")
+  assert.equal(nextViewMode("collapsed"), "default")
+})
+
+test("computeBarSegments: sums to width across healthy, caution, critical, and empty states", () => {
+  const empty = computeBarSegments(null, null, 24, "idle")
+  assert.deepEqual(empty, { sys: 0, chat: 0, tools: 0, toolsWarn: 0, empty: 24 })
+
+  const bd = { systemChars: 1000, chatChars: 2000, toolChars: 5000 }
+  const h = computeBarSegments(0.14, bd, 24, "healthy")
+  assert.equal(h.sys + h.chat + h.tools + h.toolsWarn + h.empty, 24)
+  assert.ok(h.sys >= 1 && h.chat >= 1 && h.tools >= 1 && h.toolsWarn === 0)
+
+  const c = computeBarSegments(0.68, bd, 24, "caution")
+  assert.equal(c.sys + c.chat + c.tools + c.toolsWarn + c.empty, 24)
+  assert.ok(c.toolsWarn > 0, "caution splits upper tools cells into warning color")
+
+  const crit = computeBarSegments(0.92, bd, 24, "critical")
+  assert.equal(crit.sys + crit.chat + crit.tools + crit.toolsWarn + crit.empty, 24)
+  assert.equal(crit.toolsWarn, 0)
+  assert.ok(crit.tools > 0)
+})
+
+test("messageBreakdown and compactionBreakdown: post-compaction host fallback", () => {
+  const msgs = [
+    { type: "assistant", content: "old before compaction" },
+    { type: "compaction", status: "completed", reason: "manual", time: { completed: 500 } },
+    { type: "system", text: "sys prompt" },
+    { type: "user", content: "hello world" },
+    { type: "assistant", content: [{ type: "text", text: "reply" }, { type: "tool", state: { output: "x".repeat(200) } }] },
+  ]
+  const bd = messageBreakdown(msgs)
+  assert.ok(bd && bd.systemChars > 0 && bd.chatChars > 0 && bd.toolChars >= 200)
+  const cb = compactionBreakdown(msgs)
+  assert.deepEqual(cb, { total: 1, auto: 0, manual: 1, failed: 0, lastAt: 500, lastReason: "manual" })
+})
+
+test("buildSidebarModel: healthy/caution/critical states, detail rows, and DB restart fallback", () => {
+  const DAY = 86_400_000
+  const T0 = 1_700_000_000_000
+  const healthySnap = snap({
+    now: T0,
+    context: {
+      known: true, estimatedTokens: 140000, usableTokens: 1000000, limitTokens: 1000000, ratio: 0.14,
+      breakdown: { systemChars: 40000, chatChars: 60000, toolChars: 80000 },
+    },
+    pruning: { known: true, calls: 10, drops: 5700, removedChars: 18_000_000, allowNewDrops: false },
+    shell: { known: true, runs: 0, savedChars: 0 },
+    filtering: { known: true, runs: 0, savedChars: 0 },
+    cache: { policy: "stable", allowNewDrops: false },
+    compaction: { known: true, running: false, autoEvents: 0, manualEvents: 1, failedEvents: 0, lastAt: T0 - 12 * 60_000, lastReason: "manual" },
+  })
+  const mHealthy = buildSidebarModel(healthySnap, T0, { nativeTokens: 140000, nativeLimitTokens: 1000000, sessionCreatedAt: T0 - 14 * DAY })
+  assert.equal(mHealthy.context.percentText, "14%")
+  assert.equal(mHealthy.context.pairText, "140k/1M")
+  assert.equal(mHealthy.health.state, "healthy")
+  assert.equal(mHealthy.sessionAge, "14d")
+  assert.deepEqual(mHealthy.statusRight.parts, ["1 compact", "12m ago"])
+  assert.equal(mHealthy.details.find((r) => r.key === "session")?.value, "14d")
+  assert.equal(mHealthy.details.find((r) => r.key === "compactions")?.value, "1 (manual)")
+  assert.deepEqual(mHealthy.details.find((r) => r.key === "saved")?.parts, ["5.7k drops", "-18M"])
+  assert.equal(mHealthy.details.find((r) => r.key === "cache")?.value, "stable")
+  assert.equal(mHealthy.details.find((r) => r.key === "cache")?.tone, "success")
+
+  const mCaution = buildSidebarModel(snap({
+    now: T0,
+    context: { known: true, estimatedTokens: 680000, usableTokens: 1000000, limitTokens: 1000000, ratio: 0.68 },
+    compaction: { known: true, running: false, autoEvents: 2, manualEvents: 1, failedEvents: 0, lastAt: T0 - 2 * 3_600_000, lastReason: "auto" },
+  }), T0, { nativeTokens: 680000, nativeLimitTokens: 1000000 })
+  assert.equal(mCaution.health.state, "caution")
+  assert.deepEqual(mCaution.statusRight.parts, ["3 compact", "2h ago"])
+  assert.equal(mCaution.details.find((r) => r.key === "compactions")?.value, "3 (2 auto, 1 manual)")
+
+  const mCritical = buildSidebarModel(snap({
+    now: T0,
+    context: { known: true, estimatedTokens: 920000, usableTokens: 1000000, limitTokens: 1000000, ratio: 0.92 },
+  }), T0, { nativeTokens: 920000, nativeLimitTokens: 1000000 })
+  assert.equal(mCritical.health.state, "critical")
+  assert.deepEqual(mCritical.statusRight.parts, ["compact recommended"])
+
+  // Cap-aware health: 300k/1M is 30% of model window, but 86% of 350k cap => critical + cap row shown.
+  const mCapped = buildSidebarModel(snap({
+    now: T0,
+    context: { known: true, estimatedTokens: 300000, usableTokens: 350000, limitTokens: 1000000, ratio: 300000 / 350000 },
+  }), T0, { nativeTokens: 300000, nativeLimitTokens: 1000000 })
+  assert.equal(mCapped.context.percentText, "30%")
+  assert.equal(mCapped.health.state, "critical")
+  assert.equal(mCapped.details.find((r) => r.key === "cap")?.value, "350k (86%)")
+
+  // Restart fallback: live counters reset, DB provides session compactions + vault savings + project memory.
+  const mRestart = buildSidebarModel(snap({
+    now: T0,
+    shell: { known: true, runs: 0, savedChars: 0 },
+    filtering: { known: true, runs: 0, savedChars: 0 },
+    pruning: { known: true, calls: 0, drops: 0, removedChars: 0 },
+    compaction: { known: false, running: false },
+    memory: {
+      enabled: true, active: true, summaries: 120, vaultRefs: 45, vaultChars: 500000,
+      sessionCompactions: 2, sessionAutoCompactions: 0, sessionManualCompactions: 2,
+      sessionLastCompactionAt: T0 - 600_000, sessionLastCompactionReason: "manual",
+      sessionFirstAt: T0 - 3 * DAY, sessionVaultRefs: 9, sessionVaultChars: 42000,
+    },
+  }), T0, { nativeTokens: 140000, nativeLimitTokens: 1000000 })
+  assert.equal(mRestart.sessionAge, "3d")
+  assert.deepEqual(mRestart.statusRight.parts, ["2 compact", "10m ago"])
+  assert.equal(mRestart.details.find((r) => r.key === "compactions")?.value, "2 (manual)")
+  assert.deepEqual(mRestart.details.find((r) => r.key === "saved")?.parts, ["9 vault", "-42k"])
+  assert.deepEqual(mRestart.details.find((r) => r.key === "memory")?.parts, ["120 sum", "45 vault"])
 })

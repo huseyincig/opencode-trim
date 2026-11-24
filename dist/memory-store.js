@@ -570,6 +570,22 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults = 5, ma
     LIMIT ? OFFSET ?`);
     const updateAfterStmt = db.prepare('UPDATE history SET context_after_tokens = ? WHERE project = ? AND event_id = ?');
     const statsStmt = db.prepare('SELECT count(*) AS c, max(created_at) AS m FROM history WHERE project = ? AND created_at >= ?');
+    const vaultStatsStmt = db.prepare('SELECT count(*) AS c, coalesce(sum(length(text)), 0) AS chars FROM vault WHERE project = ? AND created_at >= ?');
+    const sessionCompactionsStmt = db.prepare(`
+    SELECT count(*) AS c,
+           sum(CASE WHEN reason = 'auto' THEN 1 ELSE 0 END) AS auto_c,
+           sum(CASE WHEN reason = 'manual' THEN 1 ELSE 0 END) AS manual_c,
+           min(created_at) AS first_at,
+           max(created_at) AS last_at
+    FROM history
+    WHERE project = ? AND session_id = ? AND created_at >= ?
+      AND (reason IS NULL OR reason IN ('auto', 'manual'))`);
+    const sessionLastReasonStmt = db.prepare(`
+    SELECT reason FROM history
+    WHERE project = ? AND session_id = ? AND created_at >= ?
+      AND (reason IS NULL OR reason IN ('auto', 'manual'))
+    ORDER BY created_at DESC, id DESC LIMIT 1`);
+    const sessionVaultStatsStmt = db.prepare('SELECT count(*) AS c, coalesce(sum(length(text)), 0) AS chars, min(created_at) AS first_at FROM vault WHERE project = ? AND session_id = ? AND created_at >= ?');
     // Retention is per project: a shared DB must never lose another project's rows.
     const pruneStmt = db.prepare('DELETE FROM history WHERE created_at < ? AND project = ?');
     const vaultInsertStmt = db.prepare(`
@@ -755,6 +771,63 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults = 5, ma
             const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
             const row = statsStmt.get(statsProject, t - retentionMs);
             return { summaries: Number(row?.c ?? 0), lastSummaryAt: row?.m == null ? null : Number(row.m) };
+        },
+        /** Read-only project + optional session summary/vault aggregates for TUI sidebar hydration. */
+        sidebarStats(statsProject, sessionID, now = Date.now()) {
+            if (closed)
+                throw new Error('store closed');
+            if (typeof statsProject !== 'string' || !statsProject) {
+                return {
+                    summaries: 0, lastSummaryAt: null, vaultRefs: 0, vaultChars: 0,
+                    sessionCompactions: null, sessionAutoCompactions: null, sessionManualCompactions: null,
+                    sessionLastCompactionAt: null, sessionLastCompactionReason: null, sessionFirstAt: null,
+                    sessionVaultRefs: null, sessionVaultChars: null,
+                };
+            }
+            const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+            const cutoff = t - retentionMs;
+            const hRow = statsStmt.get(statsProject, cutoff);
+            const vRow = vaultStatsStmt.get(statsProject, cutoff);
+            const sid = typeof sessionID === 'string' && sessionID.trim() ? sessionID.trim().slice(0, 256) : null;
+            let sessionCompactions = null;
+            let sessionAutoCompactions = null;
+            let sessionManualCompactions = null;
+            let sessionLastCompactionAt = null;
+            let sessionLastCompactionReason = null;
+            let sessionFirstAt = null;
+            let sessionVaultRefs = null;
+            let sessionVaultChars = null;
+            if (sid) {
+                const sc = sessionCompactionsStmt.get(statsProject, sid, cutoff);
+                sessionCompactions = Number(sc?.c ?? 0);
+                sessionAutoCompactions = Number(sc?.auto_c ?? 0);
+                sessionManualCompactions = Number(sc?.manual_c ?? 0);
+                sessionLastCompactionAt = sc?.last_at == null ? null : Number(sc.last_at);
+                if (sessionCompactions > 0) {
+                    const lr = sessionLastReasonStmt.get(statsProject, sid, cutoff);
+                    sessionLastCompactionReason = lr?.reason === 'auto' || lr?.reason === 'manual' ? lr.reason : null;
+                }
+                const sv = sessionVaultStatsStmt.get(statsProject, sid, cutoff);
+                sessionVaultRefs = Number(sv?.c ?? 0);
+                sessionVaultChars = Number(sv?.chars ?? 0);
+                const hFirst = sc?.first_at == null ? null : Number(sc.first_at);
+                const vFirst = sv?.first_at == null ? null : Number(sv.first_at);
+                sessionFirstAt = hFirst !== null && vFirst !== null ? Math.min(hFirst, vFirst) : (hFirst ?? vFirst);
+            }
+            return {
+                summaries: Number(hRow?.c ?? 0),
+                lastSummaryAt: hRow?.m == null ? null : Number(hRow.m),
+                vaultRefs: Number(vRow?.c ?? 0),
+                vaultChars: Number(vRow?.chars ?? 0),
+                sessionCompactions,
+                sessionAutoCompactions,
+                sessionManualCompactions,
+                sessionLastCompactionAt,
+                sessionLastCompactionReason,
+                sessionFirstAt,
+                sessionVaultRefs,
+                sessionVaultChars,
+            };
         },
         prune(pruneProject, now = Date.now()) {
             if (closed)

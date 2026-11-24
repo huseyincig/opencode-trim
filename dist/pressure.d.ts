@@ -10,6 +10,11 @@ export interface ResolvedModelLimit {
     capped?: boolean;
     uncappedContext?: number;
 }
+export interface ContextBreakdown {
+    systemChars: number;
+    chatChars: number;
+    toolChars: number;
+}
 export interface PressureEstimate {
     estimatedTokens: number;
     estimatedChars: number;
@@ -22,6 +27,7 @@ export interface PressureEstimate {
     reportedTokens?: number;
     /** Token count the ratio is based on: real provider tokens when available, else the byte estimate. */
     effectiveTokens: number;
+    breakdown?: ContextBreakdown;
 }
 export declare function recordPrunedMsgChars(msg: unknown, deltaChars: number): void;
 export declare function getPrunedMsgChars(msg: unknown): number;

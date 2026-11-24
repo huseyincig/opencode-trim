@@ -814,7 +814,7 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
         const already=plannedDrops.has(e.id);
         if(!already||!vault.has(refId)){
           if(newDrops){
-            try{vault.store(refId,e);}catch{/* best-effort vault store */}
+            try{vault.store(refId,e,event?.sessionID);}catch{/* best-effort vault store */}
           }
         }
         if(vault.has(refId)){

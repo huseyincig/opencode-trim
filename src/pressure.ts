@@ -11,6 +11,11 @@ export interface ResolvedModelLimit {
   capped?: boolean;
   uncappedContext?: number;
 }
+export interface ContextBreakdown {
+  systemChars: number;
+  chatChars: number;
+  toolChars: number;
+}
 export interface PressureEstimate {
   estimatedTokens: number;
   estimatedChars: number;
@@ -23,6 +28,7 @@ export interface PressureEstimate {
   reportedTokens?: number;
   /** Token count the ratio is based on: real provider tokens when available, else the byte estimate. */
   effectiveTokens: number;
+  breakdown?: ContextBreakdown;
 }
 
 /** Pure, deliberately conservative estimates; no claim of exact provider token accounting. */
@@ -127,28 +133,43 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
   const model=resolveModelLimit(event,modelLimits,options);
   let estimatedTokens=0;
   let estimatedChars=0; // visible text chars counted by the same walk as estimatedTokens
+  let systemChars=0;
+  let chatChars=0;
+  let toolChars=0;
   let mediaPresent=false;
   let lastReportedBase;
   let lastFromNative=false;
   let trailingAfterReported=0;
   let prunedCharsSoFar=0;
+  const isToolPart=(p: any): boolean => {
+    const t=typeof p?.type==='string'?p.type.toLowerCase():'';
+    return t==='tool'||t==='tool-call'||t==='tool_use'||t==='tool-result'||t==='tool_result'||t==='tool-invocation'||t==='dynamic-tool';
+  };
   for(const part of event?.system??[]) {
     const text=limitedStringify(part);
     estimatedChars+=text.length;
+    systemChars+=text.length;
     estimatedTokens+=estimateTokens(text);
   }
   for(const msg of event?.messages??[]) {
     prunedCharsSoFar+=getPrunedMsgChars(msg);
     let msgTokens=12;
+    const role=String(msg?.role??msg?.type??'').toLowerCase();
+    const isToolMsg=role==='tool'||role==='shell';
+    const isSysMsg=role==='system'||role==='skill';
     if(typeof msg?.reasoning_content==='string') {
       const rtext=msg.reasoning_content.slice(0,600_000);
       estimatedChars+=rtext.length;
+      chatChars+=rtext.length;
       msgTokens+=estimateTokens(rtext);
     }
     const content=msg?.content;
     if(typeof content==='string') {
       const text=content.slice(0,600_000);
       estimatedChars+=text.length;
+      if(isToolMsg) toolChars+=text.length;
+      else if(isSysMsg) systemChars+=text.length;
+      else chatChars+=text.length;
       msgTokens+=estimateTokens(text);
     } else if(Array.isArray(content)) {
       for(const part of content) {
@@ -156,6 +177,9 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
         if(part.type==='media'||part.type==='image'||part.type==='file') mediaPresent=true;
         const text=limitedStringify(part);
         estimatedChars+=text.length;
+        if(isToolMsg||isToolPart(part)) toolChars+=text.length;
+        else if(isSysMsg) systemChars+=text.length;
+        else chatChars+=text.length;
         msgTokens+=estimateTokens(text);
       }
     }
@@ -180,6 +204,7 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
   for(const [name,tool] of Object.entries(event?.tools??{})) {
     const text=limitedStringify(tool);
     estimatedChars+=name.length+text.length;
+    systemChars+=name.length+text.length;
     estimatedTokens+=estimateTokens(name)+estimateTokens(text);
   }
   const reportedTokens=lastReportedBase!==undefined ? lastReportedBase+trailingAfterReported : undefined;
@@ -194,7 +219,7 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
   const usable=context && context>reserve ? context-reserve:undefined;
   const ratio=usable ? effectiveTokens/usable:undefined;
   const out: PressureEstimate = {estimatedTokens,estimatedChars,modelContext:context,modelSource:model.source,usableTokens:usable,
-    ratio,estimated:true,mediaPresent,effectiveTokens};
+    ratio,estimated:true,mediaPresent,effectiveTokens,breakdown:{systemChars,chatChars,toolChars}};
   if(reportedTokens!==undefined) out.reportedTokens=reportedTokens;
   return out;
 }

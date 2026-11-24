@@ -45,6 +45,30 @@ test('store.stats: project scoped, retention-aware, empty project safe', () => {
   assert.throws(() => s.stats('A'), /closed/);
 });
 
+test('store.sidebarStats: separates real compactions from custom reasons and aggregates session/project vault', () => {
+  const now = Date.now();
+  const s = openMemoryStore({ dbPath: ':memory:', retentionDays: 10 });
+  s.archive({ event_id: 'c1', project: 'A', session_id: 's1', reason: 'manual', text: 'manual summary 1', created_at: now - 3 * DAY });
+  s.archive({ event_id: 'c2', project: 'A', session_id: 's1', reason: 'auto', text: 'auto summary 2', created_at: now - DAY });
+  s.archive({ event_id: 'other-kind', project: 'A', session_id: 's1', reason: 'custom:note', text: 'non compaction note', created_at: now - 1000 });
+  s.archive({ event_id: 'other-sess', project: 'A', session_id: 's2', reason: 'manual', text: 'other session summary', created_at: now - 2000 });
+  s.saveVault({ project: 'A', session_id: 's1', ref_id: 'trm_1', tool: 'read', target: 'a.ts', text: 'x'.repeat(1200), created_at: now - 2 * DAY });
+  s.saveVault({ project: 'A', session_id: 's2', ref_id: 'trm_2', tool: 'shell', target: 'ls', text: 'y'.repeat(800), created_at: now - DAY });
+  const st = s.sidebarStats('A', 's1', now);
+  assert.equal(st.summaries, 4);
+  assert.equal(st.vaultRefs, 2);
+  assert.equal(st.vaultChars, 2000);
+  assert.equal(st.sessionCompactions, 2);
+  assert.equal(st.sessionAutoCompactions, 1);
+  assert.equal(st.sessionManualCompactions, 1);
+  assert.equal(st.sessionLastCompactionAt, now - DAY);
+  assert.equal(st.sessionLastCompactionReason, 'auto');
+  assert.equal(st.sessionFirstAt, now - 3 * DAY);
+  assert.equal(st.sessionVaultRefs, 1);
+  assert.equal(st.sessionVaultChars, 1200);
+  s.close();
+});
+
 test('memoryDbBytes: file + wal, null for :memory:, missing file, bad input', () => {
   const { d, p } = tmpDb();
   assert.equal(memoryDbBytes(':memory:'), null);

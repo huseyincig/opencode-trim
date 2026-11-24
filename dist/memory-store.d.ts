@@ -63,6 +63,21 @@ export declare function openMemoryStore({ dbPath, retentionDays, maxResults, max
         summaries: number;
         lastSummaryAt: number | null;
     };
+    /** Read-only project + optional session summary/vault aggregates for TUI sidebar hydration. */
+    sidebarStats(statsProject: unknown, sessionID?: unknown, now?: number): {
+        summaries: number;
+        lastSummaryAt: number | null;
+        vaultRefs: number;
+        vaultChars: number;
+        sessionCompactions: number | null;
+        sessionAutoCompactions: number | null;
+        sessionManualCompactions: number | null;
+        sessionLastCompactionAt: number | null;
+        sessionLastCompactionReason: string | null;
+        sessionFirstAt: number | null;
+        sessionVaultRefs: number | null;
+        sessionVaultChars: number | null;
+    };
     prune(pruneProject: unknown, now?: number): {
         deleted: number;
     };

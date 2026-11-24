@@ -521,7 +521,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   const contextStats=(event: any, pressure: any)=>observe((s: any)=>s.recordContext({
     sessionID:sessionOf(event),estimatedTokens:typeof pressure.effectiveTokens==='number'?pressure.effectiveTokens:pressure.reportedTokens!==undefined?Math.max(pressure.estimatedTokens,pressure.reportedTokens):pressure.estimatedTokens,estimatedChars:pressure.estimatedChars,
     usableTokens:pressure.usableTokens,limitTokens:pressure.modelContext,ratio:pressure.ratio,
-    source:pressure.modelSource,media:pressure.mediaPresent}));
+    source:pressure.modelSource,media:pressure.mediaPresent,breakdown:pressure.breakdown}));
   const runPruning=async(event: any, kind: string): Promise<void> => {
     if(!opts.pruning||foreignEvent(event))return;
     try{
@@ -718,6 +718,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
                 dedupeRing.reset(sid);
                 workingState.reset(sid);
                 sessionPressure.delete(sid);
+                nativeBySession.delete(sid);appliedChars.delete(sid);
                 const cur=autoCompactState.get(sid);
                 if(cur)cur.inFlight=false;
               }
@@ -739,7 +740,10 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
         onReady:({project,store,dbPath,vault}: any)=>{
           activeVault=vault??null;
           if(stats){
-            stats.setMemoryProvider(()=>({...store.stats(project),dbBytes:memoryDbBytes(dbPath)}));
+            stats.setMemoryProvider((sid?: string)=>({
+              ...(typeof store.sidebarStats==='function'?store.sidebarStats(project,sid):store.stats(project)),
+              dbBytes:memoryDbBytes(dbPath),
+            }));
             stats.setMemoryState({active:true});
           }
         },
@@ -753,6 +757,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
           dedupeRing.reset(sid);
           workingState.reset(sid);
           sessionPressure.delete(sid);
+          nativeBySession.delete(sid);appliedChars.delete(sid);
           const cur=autoCompactState.get(sid);
           if(cur)cur.inFlight=false;
         },

@@ -28,14 +28,25 @@ export function normalizeSnapshot(raw) {
         return null;
     const e = o(raw.engine), c = o(raw.context), sh = o(raw.shell), f = o(raw.filtering);
     const p = o(raw.pruning), ca = o(raw.cache), co = o(raw.compaction), m = o(raw.memory);
+    const th = o(e.thresholds);
+    const bd = isObj(c.breakdown)
+        ? {
+            systemChars: Math.max(0, n(c.breakdown.systemChars) ?? 0),
+            chatChars: Math.max(0, n(c.breakdown.chatChars) ?? 0),
+            toolChars: Math.max(0, n(c.breakdown.toolChars) ?? 0),
+        }
+        : null;
     return {
         version: n(raw.version),
         now: n(raw.now),
         sessionID: s(raw.sessionID),
         since: n(raw.since),
         revision: n(raw.revision),
-        engine: { enabled: b(e.enabled), shell: b(e.shell), toolFiltering: b(e.toolFiltering), pruning: b(e.pruning), compactionInputPruning: b(e.compactionInputPruning) },
-        context: { known: b(c.known) === true, estimatedTokens: n(c.estimatedTokens), estimatedChars: n(c.estimatedChars), usableTokens: n(c.usableTokens), limitTokens: n(c.limitTokens), ratio: n(c.ratio), source: safeText(c.source), media: b(c.media), at: n(c.at) },
+        engine: {
+            enabled: b(e.enabled), shell: b(e.shell), toolFiltering: b(e.toolFiltering), pruning: b(e.pruning), compactionInputPruning: b(e.compactionInputPruning),
+            thresholds: { start: n(th.start), force: n(th.force), critical: n(th.critical) },
+        },
+        context: { known: b(c.known) === true, estimatedTokens: n(c.estimatedTokens), estimatedChars: n(c.estimatedChars), usableTokens: n(c.usableTokens), limitTokens: n(c.limitTokens), ratio: n(c.ratio), source: safeText(c.source), media: b(c.media), at: n(c.at), breakdown: bd },
         shell: { known: b(sh.known) === true, runs: n(sh.runs), changed: n(sh.changed), savedChars: n(sh.savedChars) },
         filtering: { known: b(f.known) === true, runs: n(f.runs), changed: n(f.changed), savedChars: n(f.savedChars) },
         pruning: { known: b(p.known) === true, calls: n(p.calls), drops: n(p.drops), removedChars: n(p.removedChars), lastReason: safeText(p.lastReason), lastAt: n(p.lastAt), allowNewDrops: b(p.allowNewDrops) },
@@ -45,7 +56,14 @@ export function normalizeSnapshot(raw) {
             lastAt: n(co.lastAt), lastReason: safeText(co.lastReason, 10), beforeTokens: n(co.beforeTokens), afterTokens: n(co.afterTokens), reducedTokens: n(co.reducedTokens),
             beforeChars: n(co.beforeChars), afterChars: n(co.afterChars), reducedChars: n(co.reducedChars), reducedRatio: n(co.reducedRatio),
         },
-        memory: { enabled: b(m.enabled), active: b(m.active), error: m.error === null || m.error === undefined || m.error === false ? null : safeText(typeof m.error === "string" ? m.error : "error", 20) ?? "error", summaries: n(m.summaries), searches: n(m.searches), searchResults: n(m.searchResults), lastSummaryAt: n(m.lastSummaryAt), dbBytes: n(m.dbBytes) },
+        memory: {
+            enabled: b(m.enabled), active: b(m.active), error: m.error === null || m.error === undefined || m.error === false ? null : safeText(typeof m.error === "string" ? m.error : "error", 20) ?? "error",
+            summaries: n(m.summaries), searches: n(m.searches), searchResults: n(m.searchResults), lastSummaryAt: n(m.lastSummaryAt), dbBytes: n(m.dbBytes),
+            vaultRefs: n(m.vaultRefs), vaultChars: n(m.vaultChars),
+            sessionCompactions: n(m.sessionCompactions), sessionAutoCompactions: n(m.sessionAutoCompactions), sessionManualCompactions: n(m.sessionManualCompactions),
+            sessionLastCompactionAt: n(m.sessionLastCompactionAt), sessionLastCompactionReason: m.sessionLastCompactionReason === "auto" || m.sessionLastCompactionReason === "manual" ? m.sessionLastCompactionReason : null,
+            sessionFirstAt: n(m.sessionFirstAt), sessionVaultRefs: n(m.sessionVaultRefs), sessionVaultChars: n(m.sessionVaultChars),
+        },
     };
 }
 // Cache policy label: explicit policy wins; else derived from allowNewDrops; else unknown (null).
@@ -154,7 +172,7 @@ function totalSaved(snap) {
         }
     return any ? sum : null;
 }
-export const TRIM_VERSION = "0.9.2";
+export const TRIM_VERSION = "0.9.3";
 export const SECTION_TITLES = { context: "Context", optimization: "Optimization", compaction: "Compaction", memory: "Memory" };
 // Flat row model. Each row: key, section, kind (stat|warn), label, value, tone, line (compat).
 export function buildRows(raw, now = Date.now(), options = {}) {
@@ -345,4 +363,409 @@ export function buildCollapsedRows(raw, options = {}) {
 }
 export function headerText(stale = false) {
     return stale ? "- trim !" : "- trim";
+}
+export function normalizeViewMode(stored) {
+    if (isObj(stored)) {
+        if (stored.mode === "collapsed" || stored.mode === "default" || stored.mode === "expanded")
+            return stored.mode;
+        if (stored.expanded === true)
+            return "expanded";
+        if (stored.expanded === false)
+            return "default";
+    }
+    return "default";
+}
+export function nextViewMode(mode) {
+    if (mode === "default")
+        return "expanded";
+    if (mode === "expanded")
+        return "collapsed";
+    return "default";
+}
+// Host-side fallback breakdown from loaded session messages (after the last completed compaction).
+export function messageBreakdown(messages) {
+    if (!Array.isArray(messages) || !messages.length)
+        return null;
+    let start = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (isObj(m) && m.type === "compaction" && m.status === "completed") {
+            start = i + 1;
+            break;
+        }
+    }
+    let systemChars = 0;
+    let chatChars = 0;
+    let toolChars = 0;
+    const measure = (v) => {
+        if (typeof v === "string")
+            return v.length;
+        if (!v || typeof v !== "object")
+            return 0;
+        try {
+            return JSON.stringify(v).length;
+        }
+        catch {
+            return 0;
+        }
+    };
+    const isToolPart = (p) => {
+        const t = typeof p?.type === "string" ? p.type.toLowerCase() : "";
+        return t === "tool" || t === "tool-call" || t === "tool_use" || t === "tool-result" || t === "tool_result" || t === "tool-invocation" || t === "dynamic-tool";
+    };
+    for (let i = start; i < messages.length; i++) {
+        const m = messages[i];
+        if (!isObj(m))
+            continue;
+        const role = String(m.type ?? m.role ?? "").toLowerCase();
+        if (role === "system" || role === "skill") {
+            systemChars += measure(m.text ?? m.content ?? m.parts);
+            continue;
+        }
+        if (role === "shell" || role === "tool") {
+            toolChars += measure(m.text ?? m.content ?? m.output ?? m.parts);
+            continue;
+        }
+        const content = Array.isArray(m.content) ? m.content : Array.isArray(m.parts) ? m.parts : null;
+        if (content) {
+            for (const part of content) {
+                if (!isObj(part))
+                    continue;
+                const len = measure(part);
+                if (isToolPart(part))
+                    toolChars += len;
+                else
+                    chatChars += len;
+            }
+        }
+        else {
+            chatChars += measure(m.text ?? m.content);
+        }
+    }
+    if (systemChars + chatChars + toolChars <= 0)
+        return null;
+    return { systemChars, chatChars, toolChars };
+}
+// Host-side compaction breakdown including auto/manual counts (keeps compactionHistory shape intact).
+export function compactionBreakdown(messages) {
+    if (!Array.isArray(messages))
+        return null;
+    let total = 0, auto = 0, manual = 0, failed = 0;
+    let newest = null;
+    for (const m of messages) {
+        if (!isObj(m) || m.type !== "compaction")
+            continue;
+        if (m.status === "failed") {
+            failed++;
+            continue;
+        }
+        if (m.status !== "completed")
+            continue;
+        total++;
+        if (m.reason === "auto")
+            auto++;
+        else if (m.reason === "manual")
+            manual++;
+        const t = o(m.time);
+        const at = n(t.completed) ?? n(t.created);
+        if (newest === null || (at !== null && (newest.at === null || at > newest.at))) {
+            newest = { at, reason: m.reason === "auto" || m.reason === "manual" ? m.reason : null };
+        }
+    }
+    if (total === 0 && failed === 0)
+        return null;
+    return { total, auto, manual, failed, lastAt: newest ? newest.at : null, lastReason: newest ? newest.reason : null };
+}
+export function computeBarSegments(barRatio, breakdown, width = 24, health = "healthy") {
+    const w = Number.isInteger(width) && width > 0 ? width : 24;
+    if (barRatio === null || !Number.isFinite(barRatio) || barRatio <= 0) {
+        return { sys: 0, chat: 0, tools: 0, toolsWarn: 0, empty: w };
+    }
+    const clamped = Math.min(1, Math.max(0, barRatio));
+    const filled = Math.min(w, Math.max(1, Math.round(clamped * w)));
+    const empty = w - filled;
+    const sysC = breakdown ? Math.max(0, breakdown.systemChars) : 0;
+    const chatC = breakdown ? Math.max(0, breakdown.chatChars) : 0;
+    const toolC = breakdown ? Math.max(0, breakdown.toolChars) : 0;
+    const sum = sysC + chatC + toolC;
+    let sys = 0, chat = 0, tools = 0;
+    if (sum <= 0) {
+        tools = filled;
+    }
+    else {
+        const rawSys = (sysC / sum) * filled;
+        const rawChat = (chatC / sum) * filled;
+        const rawTools = (toolC / sum) * filled;
+        sys = Math.floor(rawSys);
+        chat = Math.floor(rawChat);
+        tools = Math.floor(rawTools);
+        // Guarantee non-trivial categories (>= 3% share) at least 1 cell when space permits.
+        if (filled >= 3) {
+            if (sysC > 0 && sysC / sum >= 0.03 && sys === 0)
+                sys = 1;
+            if (chatC > 0 && chatC / sum >= 0.03 && chat === 0)
+                chat = 1;
+            if (toolC > 0 && toolC / sum >= 0.03 && tools === 0)
+                tools = 1;
+        }
+        let cur = sys + chat + tools;
+        // Trim overflow from the largest segment if min-1 guarantees exceeded filled.
+        while (cur > filled) {
+            if (tools >= chat && tools >= sys && tools > 0)
+                tools--;
+            else if (chat >= sys && chat > 0)
+                chat--;
+            else if (sys > 0)
+                sys--;
+            cur--;
+        }
+        // Distribute remaining rounding cells by largest fractional remainder.
+        const rem = [
+            ["sys", rawSys - sys],
+            ["chat", rawChat - chat],
+            ["tools", rawTools - tools],
+        ];
+        rem.sort((a, b) => b[1] - a[1]);
+        let idx = 0;
+        while (cur < filled) {
+            const k = rem[idx % 3][0];
+            if (k === "sys")
+                sys++;
+            else if (k === "chat")
+                chat++;
+            else
+                tools++;
+            cur++;
+            idx++;
+        }
+    }
+    let toolsWarn = 0;
+    if (health === "caution" && tools >= 2) {
+        const lower = Math.floor(tools / 2);
+        toolsWarn = tools - lower;
+        tools = lower;
+    }
+    return { sys, chat, tools, toolsWarn, empty };
+}
+function formatCompactionDetail(info) {
+    if (info.running)
+        return { value: "running", tone: "warning" };
+    if (info.count <= 0 && info.failed <= 0)
+        return { value: "0", tone: "muted" };
+    const parts = [];
+    if (info.auto > 0 && info.manual > 0)
+        parts.push(`${fmtCount(info.auto)} auto, ${fmtCount(info.manual)} manual`);
+    else if (info.auto > 0 && info.auto === info.count)
+        parts.push("auto");
+    else if (info.manual > 0 && info.manual === info.count)
+        parts.push("manual");
+    else if (info.source === "history" || info.source === "db")
+        parts.push("archived");
+    if (info.failed > 0)
+        parts.push(`${fmtCount(info.failed)} failed`);
+    const main = parts.length ? `${fmtCount(info.count)} (${parts.join(", ")})` : fmtCount(info.count);
+    return { value: main, tone: info.failed > 0 && info.count === 0 ? "error" : "base" };
+}
+export function buildSidebarModel(raw, now = Date.now(), options = {}) {
+    const snap = normalizeSnapshot(raw);
+    const native = nativeOf(options);
+    const nativeLimit = nativeLimitOf(options);
+    const refNow = n(now) ?? snap?.now ?? Date.now();
+    const cm = snap ? contextMetrics(snap, native, nativeLimit) : null;
+    const c = snap?.context ?? null;
+    const known = !!(c?.known || native !== null);
+    const used = native !== null ? native : (c?.estimatedTokens ?? null);
+    const limit = native !== null ? (nativeLimit ?? c?.limitTokens ?? null) : (c?.limitTokens ?? null);
+    const barRatio = cm && limit ? Math.max(0, (used ?? 0) / limit) : null;
+    const startThreshold = snap?.engine?.thresholds?.start ?? 0.65;
+    const forceThreshold = snap?.engine?.thresholds?.force ?? 0.85;
+    const engineRatio = c?.ratio ?? null;
+    const effectiveRatio = barRatio !== null
+        ? (engineRatio !== null ? Math.max(barRatio, engineRatio) : barRatio)
+        : engineRatio;
+    let healthState = "idle";
+    let healthTone = "muted";
+    if (effectiveRatio !== null) {
+        if (cm?.over || effectiveRatio >= forceThreshold) {
+            healthState = "critical";
+            healthTone = "error";
+        }
+        else if (effectiveRatio >= startThreshold) {
+            healthState = "caution";
+            healthTone = "warning";
+        }
+        else {
+            healthState = "healthy";
+            healthTone = "success";
+        }
+    }
+    const usedText = native !== null ? fmtCount(native) : (c?.estimatedTokens !== null && c?.estimatedTokens !== undefined ? "~" + fmtCount(c.estimatedTokens) : "--");
+    const limitText = limit !== null && limit > 0 ? fmtCount(limit) : "--";
+    const pairText = known && usedText !== "--" ? `${usedText}/${limitText}` : "--";
+    const percent = cm ? cm.percent : null;
+    const percentText = percent !== null ? `${percent}%` : "--";
+    const usable = c?.usableTokens ?? null;
+    const hasCap = usable !== null && usable > 0 && limit !== null && limit > 0 && usable < limit;
+    const capPct = hasCap && used !== null ? Math.min(100, Math.round((Math.max(0, used) / usable) * 100)) : null;
+    const capText = hasCap ? `${fmtCount(usable)}${capPct !== null ? ` (${capPct}%)` : ""}` : null;
+    const rawBreakdown = c?.breakdown ?? (isObj(options?.messageBreakdown)
+        ? {
+            systemChars: Math.max(0, n(options.messageBreakdown.systemChars) ?? 0),
+            chatChars: Math.max(0, n(options.messageBreakdown.chatChars) ?? 0),
+            toolChars: Math.max(0, n(options.messageBreakdown.toolChars) ?? 0),
+        }
+        : null);
+    // Session age: prefer host SessionInfo.time.created, then DB earliest session timestamp, then live RPC since.
+    const createdAt = n(options?.sessionCreatedAt) ?? snap?.memory?.sessionFirstAt ?? snap?.since ?? null;
+    const sessionAge = createdAt !== null && createdAt > 0 ? fmtAge(Math.max(0, refNow - createdAt)) : null;
+    // Compactions: live RPC > host message compaction history > DB session compactions.
+    const k = snap?.compaction;
+    const hostHist = isObj(options?.compactionBreakdown) ? options.compactionBreakdown : historyOf(options);
+    const mem = snap?.memory;
+    let comp = { running: false, count: 0, auto: 0, manual: 0, failed: 0, lastAt: null, lastReason: null, source: "none" };
+    if (k && (k.running === true || k.known)) {
+        const a = k.autoEvents ?? 0;
+        const mCount = k.manualEvents ?? 0;
+        comp = {
+            running: k.running === true,
+            count: a + mCount,
+            auto: a,
+            manual: mCount,
+            failed: k.failedEvents ?? 0,
+            lastAt: k.lastAt,
+            lastReason: k.lastReason,
+            source: "live",
+        };
+    }
+    else if (hostHist && ((n(hostHist.total) ?? 0) > 0 || (n(hostHist.failed) ?? 0) > 0)) {
+        comp = {
+            running: false,
+            count: n(hostHist.total) ?? 0,
+            auto: n(hostHist.auto) ?? 0,
+            manual: n(hostHist.manual) ?? 0,
+            failed: n(hostHist.failed) ?? 0,
+            lastAt: n(hostHist.lastAt),
+            lastReason: hostHist.lastReason === "auto" || hostHist.lastReason === "manual" ? hostHist.lastReason : null,
+            source: "history",
+        };
+    }
+    else if (mem && mem.sessionCompactions !== null && mem.sessionCompactions > 0) {
+        comp = {
+            running: false,
+            count: mem.sessionCompactions,
+            auto: mem.sessionAutoCompactions ?? 0,
+            manual: mem.sessionManualCompactions ?? 0,
+            failed: 0,
+            lastAt: mem.sessionLastCompactionAt,
+            lastReason: mem.sessionLastCompactionReason,
+            source: "db",
+        };
+    }
+    // Session-scoped savings: live session drops/savedChars, or persisted DB session vault refs after restart.
+    const liveSaved = snap ? totalSaved(snap) : null;
+    const liveDrops = snap?.pruning?.known ? (snap.pruning.drops ?? 0) : 0;
+    const dbSessVaultRefs = mem?.sessionVaultRefs ?? 0;
+    const dbSessVaultChars = mem?.sessionVaultChars ?? 0;
+    let savedParts = [];
+    let savedTone = "muted";
+    if (liveDrops > 0 || (liveSaved !== null && liveSaved > 0)) {
+        if (liveDrops > 0)
+            savedParts.push(`${fmtCount(liveDrops)} drops`);
+        if (liveSaved !== null && liveSaved > 0)
+            savedParts.push(`-${fmtChars(liveSaved)}`);
+        savedTone = "base";
+    }
+    else if (dbSessVaultRefs > 0 || dbSessVaultChars > 0) {
+        if (dbSessVaultRefs > 0)
+            savedParts.push(`${fmtCount(dbSessVaultRefs)} vault`);
+        if (dbSessVaultChars > 0)
+            savedParts.push(`-${fmtChars(dbSessVaultChars)}`);
+        savedTone = "base";
+    }
+    // Bottom-right status summary for Open/Default mode.
+    let statusRightParts = [];
+    let statusRightTone = "muted";
+    if (comp.running) {
+        statusRightParts = ["compacting..."];
+        statusRightTone = "warning";
+    }
+    else if (healthState === "critical") {
+        statusRightParts = ["compact recommended"];
+        statusRightTone = "muted";
+    }
+    else if (comp.count > 0) {
+        statusRightParts.push(`${fmtCount(comp.count)} compact`);
+        if (comp.lastAt !== null)
+            statusRightParts.push(`${fmtAge(Math.max(0, refNow - comp.lastAt))} ago`);
+    }
+    else if (savedParts.length) {
+        statusRightParts = savedParts;
+    }
+    else {
+        statusRightParts = ["idle"];
+    }
+    // Detail rows for Expanded mode.
+    const details = [];
+    const pushDetail = (key, label, parts, tone = "base") => {
+        details.push({ key, label, parts, value: parts.join(" | "), tone });
+    };
+    if (sessionAge)
+        pushDetail("session", "session", [sessionAge], "base");
+    if (capText)
+        pushDetail("cap", "cap", [capText], capPct !== null && capPct >= 85 ? "warning" : "base");
+    const compDetail = formatCompactionDetail(comp);
+    pushDetail("compactions", "compactions", [compDetail.value], compDetail.tone);
+    pushDetail("saved", "saved", savedParts.length ? savedParts : ["idle"], savedTone);
+    const policy = deriveCachePolicy(snap);
+    if (policy) {
+        const pTone = policy === "stable" ? "success" : (policy === "open" || policy === "bust") ? "warning" : "muted";
+        pushDetail("cache", "cache", [policy], pTone);
+    }
+    else if (snap?.pruning?.known) {
+        pushDetail("cache", "cache", ["idle"], "muted");
+    }
+    if (mem) {
+        if (mem.error) {
+            pushDetail("memory", "memory", ["error " + mem.error], "error");
+        }
+        else if (mem.enabled === true && mem.active === true) {
+            const mParts = [`${fmtCount(mem.summaries ?? 0)} sum`];
+            if (mem.vaultRefs !== null && mem.vaultRefs > 0)
+                mParts.push(`${fmtCount(mem.vaultRefs)} vault`);
+            else if (mem.dbBytes !== null)
+                mParts.push(fmtCount(mem.dbBytes).replace(/k$/, "K"));
+            pushDetail("memory", "memory", mParts, "base");
+        }
+    }
+    return {
+        hasData: snap !== null,
+        context: {
+            known,
+            percent,
+            percentText,
+            usedText,
+            limitText,
+            pairText,
+            barRatio,
+            effectiveRatio,
+            over: cm?.over ?? 0,
+            overText: cm && cm.over ? (native !== null ? "" : "~") + fmtCount(cm.over) : null,
+            capTokens: hasCap ? usable : null,
+            capRatio: capPct !== null ? capPct / 100 : null,
+            capText,
+        },
+        health: {
+            state: healthState,
+            label: healthState,
+            tone: healthTone,
+        },
+        sessionAge,
+        statusRight: {
+            parts: statusRightParts,
+            text: statusRightParts.join(" | "),
+            tone: statusRightTone,
+        },
+        details,
+        segments: (width) => computeBarSegments(barRatio, rawBreakdown, width, healthState),
+    };
 }
