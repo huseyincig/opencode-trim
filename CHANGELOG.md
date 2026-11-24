@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.3 — 2026-11-24
+
+- **Critical Fix: OpenCode V2 `SystemPart` Schema Compliance for `memory.recentWork` (`src/memory.ts`)**:
+  - Fixed `memory.recentWork` pushing a raw string into `event.system` instead of a V2 `SystemPart` object (`{ type: "text", text }`), which crashed V2 provider request compilers evaluating `b.text.length`.
+  - Added one-time `ctx.session.get({ sessionID })` `parentID` lookup (cached per session) so child/subagent sessions are reliably detected and excluded from `<recent_work>` injection even when `SessionContext` omits `event.parentID`.
+- **Verification**: **`543 / 543`** tests passing across 29 suites (`npm run check`), `tsc --noEmit` clean (`0` errors), `94 / 94` files syntax-checked.
+
 ## 0.11.2 — 2026-11-24
 
 - **Prevent Stale Source-Code Reads via `trim_expand` (`src/prune.ts`, `src/memory.ts`, `src/memory-store.ts`)**:

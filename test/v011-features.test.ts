@@ -196,6 +196,7 @@ test('Feature 6: trim_history_search recent & scope=all + opt-in prompt-cache-sa
     },
     session: {
       hook: async (name: string, fn: any) => { if (name === 'context') contextHook = fn; return { dispose() {} }; },
+      get: async ({ sessionID }: any) => (sessionID === 'child-via-api' ? { id: sessionID, parentID: 'top-1' } : { id: sessionID }),
     },
     event: {
       subscribe: async () => ({ async *[Symbol.asyncIterator]() {} }),
@@ -205,24 +206,33 @@ test('Feature 6: trim_history_search recent & scope=all + opt-in prompt-cache-sa
   try {
     storeRef.archive({ event_id: 'e10', project: '/proj/alpha', session_id: 'prev-1', reason: 'auto', created_at: Date.now() - 5000, text: '## Objective\nShip frozen recent work context.' });
 
-    // Top-level session turn 1 gets <recent_work>
-    const ev1 = { sessionID: 'top-1', location: { directory: '/proj/alpha' }, system: ['base system'], messages: [] };
-    contextHook(ev1);
+    // Top-level session turn 1 gets a valid V2 SystemPart ({ type: 'text', text }) -- NEVER a raw string!
+    const ev1: any = { sessionID: 'top-1', location: { directory: '/proj/alpha' }, system: [{ type: 'text', text: 'base system' }], messages: [] };
+    await contextHook(ev1);
     assert.equal(ev1.system.length, 2);
-    const frozen1 = ev1.system[1];
-    assert.match(frozen1, /<recent_work>/);
-    assert.match(frozen1, /Ship frozen recent work context/);
+    // Simulate V2 provider request compiler: req.system.filter((b) => b.text.length > 0)
+    const compiled = ev1.system.filter((b: any) => b.text.length > 0);
+    assert.equal(compiled.length, 2);
+    const frozenPart1 = ev1.system[1];
+    assert.equal(frozenPart1.type, 'text');
+    assert.match(frozenPart1.text, /<recent_work>/);
+    assert.match(frozenPart1.text, /Ship frozen recent work context/);
 
     // Archive another summary mid-session; turn 2 of top-1 MUST still receive the exact byte-identical frozen block!
     storeRef.archive({ event_id: 'e11', project: '/proj/alpha', session_id: 'prev-2', reason: 'auto', created_at: Date.now(), text: '## Objective\nNew later summary that must not bust cache.' });
-    const ev2 = { sessionID: 'top-1', location: { directory: '/proj/alpha' }, system: ['base system'], messages: [] };
-    contextHook(ev2);
-    assert.equal(ev2.system[1], frozen1, 'frozen <recent_work> must stay byte-identical across turns for prompt cache stability');
+    const ev2: any = { sessionID: 'top-1', location: { directory: '/proj/alpha' }, system: [{ type: 'text', text: 'base system' }], messages: [] };
+    await contextHook(ev2);
+    assert.equal(ev2.system[1].type, 'text');
+    assert.equal(ev2.system[1].text, frozenPart1.text, 'frozen <recent_work> must stay byte-identical across turns for prompt cache stability');
 
-    // Subagent session MUST NOT receive <recent_work>
-    const evSub = { sessionID: 'sub-1', parentID: 'top-1', location: { directory: '/proj/alpha' }, system: ['base system'], messages: [] };
-    contextHook(evSub);
+    // Subagent session (via event.parentID OR ctx.session.get().parentID) MUST NOT receive <recent_work>
+    const evSub: any = { sessionID: 'sub-1', parentID: 'top-1', location: { directory: '/proj/alpha' }, system: [{ type: 'text', text: 'base system' }], messages: [] };
+    await contextHook(evSub);
     assert.equal(evSub.system.length, 1);
+
+    const evChildApi: any = { sessionID: 'child-via-api', location: { directory: '/proj/alpha' }, system: [{ type: 'text', text: 'base system' }], messages: [] };
+    await contextHook(evChildApi);
+    assert.equal(evChildApi.system.length, 1);
 
     // trim_history_search tool supports recent: true and scope: 'all'
     const searchTool = tools.get(TOOL_NAME);

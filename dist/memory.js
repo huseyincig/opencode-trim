@@ -475,8 +475,9 @@ export async function setupMemory(ctx, opts, hooks) {
             });
         })));
         // The summary enters context after compaction.ended; the next context hook for that session sees the real size.
-        // When memory.recentWork is opted in, also inject a frozen per-session <recent_work> block for top-level sessions.
-        regs.push(validReg(await ctx.session.hook('context', (event) => {
+        // When memory.recentWork is opted in, also inject a frozen per-session V2 SystemPart ({ type: 'text', text })
+        // for top-level sessions only (never subagents, compaction, title, or generate requests).
+        regs.push(validReg(await ctx.session.hook('context', async (event) => {
             try {
                 const sid = event?.sessionID;
                 if (typeof sid !== 'string' || !sid)
@@ -486,20 +487,32 @@ export async function setupMemory(ctx, opts, hooks) {
                     return;
                 if (mem.recentWork === true &&
                     Array.isArray(event?.system) &&
-                    !event?.parentID &&
-                    !event?.session?.parentID &&
                     event?.kind !== 'compaction' &&
                     event?.kind !== 'title' &&
                     event?.kind !== 'generate') {
                     let block = frozenRecentWork.get(sid);
                     if (block === undefined) {
-                        block = store.recentWork({ project, limit: 5 });
+                        let isChild = Boolean(event?.parentID || event?.session?.parentID);
+                        if (!isChild && typeof ctx?.session?.get === 'function') {
+                            try {
+                                const info = await ctx.session.get({ sessionID: sid });
+                                if (obj(info) && (info.parentID || info.parentId))
+                                    isChild = true;
+                            }
+                            catch { /* best effort; fall through */ }
+                        }
+                        block = isChild ? null : store.recentWork({ project, limit: 5 });
                         if (frozenRecentWork.size >= 128)
                             frozenRecentWork.delete(frozenRecentWork.keys().next().value);
                         frozenRecentWork.set(sid, block);
                     }
-                    if (block && !event.system.includes(block)) {
-                        event.system.push(block);
+                    if (block) {
+                        const already = event.system.some((p) => (typeof p === 'string' ? p : obj(p) ? p.text : undefined) === block);
+                        if (!already) {
+                            // OpenCode V2 SessionRequest.system is Array<SystemPart> ({ type: 'text', text: string }).
+                            // Pushing a raw string crashes V2 provider request compilers evaluating b.text.length.
+                            event.system.push({ type: 'text', text: block });
+                        }
                     }
                 }
                 const wait = awaitingAfter.get(sid);
