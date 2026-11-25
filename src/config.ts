@@ -48,6 +48,12 @@ export interface TrimOptions {
   readonly purgeErrorInputs: boolean;
   readonly pruneHistoricalReasoning: boolean;
   readonly pruneUnrelatedDiagnostics: boolean;
+  readonly supersedeWrites: boolean;
+  readonly pruneOldToolInputs: boolean;
+  readonly pruneAgedDiffs: boolean;
+  readonly pruneResolvedErrors: boolean;
+  readonly adaptivePruning: boolean;
+  readonly virtualizeOutputChars: number;
   readonly prunePreviewLines: number;
   readonly dedupeWindow: number;
   readonly cacheTtlMs: number;
@@ -88,6 +94,12 @@ export const DEFAULTS = Object.freeze({
   purgeErrorInputs: true,
   pruneHistoricalReasoning: true,
   pruneUnrelatedDiagnostics: true,
+  supersedeWrites: true,
+  pruneOldToolInputs: true,
+  pruneAgedDiffs: true,
+  pruneResolvedErrors: true,
+  adaptivePruning: true,
+  virtualizeOutputChars: 32000,
   prunePreviewLines: 2,
   dedupeWindow: 8,
   cacheTtlMs: 300_000,
@@ -214,8 +226,11 @@ export function parseOptions(options: Record<string, any> = {}): TrimOptions {
     if (parsed.cap !== undefined) result.contextWindowCap = parsed.cap;
     if (parsed.ratioCap !== undefined) result.contextWindowRatioCap = parsed.ratioCap;
   }
-  for(const key of ['enabled','shell','toolFiltering','pruning','compactionInputPruning','autoCompact','reduceTool','purgeErrorInputs','pruneHistoricalReasoning','pruneUnrelatedDiagnostics']) {
+  for(const key of ['enabled','shell','toolFiltering','pruning','compactionInputPruning','autoCompact','reduceTool','purgeErrorInputs','pruneHistoricalReasoning','pruneUnrelatedDiagnostics','supersedeWrites','pruneOldToolInputs','pruneAgedDiffs','pruneResolvedErrors','adaptivePruning']) {
     if(typeof result[key] !== 'boolean') throw new TypeError(`opencode-trim: ${key} must be boolean`);
+  }
+  if (!Number.isSafeInteger(result.virtualizeOutputChars) || (result.virtualizeOutputChars !== 0 && (result.virtualizeOutputChars < 4000 || result.virtualizeOutputChars > 500000))) {
+    throw new TypeError('opencode-trim: virtualizeOutputChars must be 0 or 4000..500000');
   }
   for(const [field,[min,max]] of Object.entries(ranges)) {
     if(!Number.isSafeInteger(result[field])||result[field]<min||result[field]>max) {

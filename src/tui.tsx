@@ -643,6 +643,23 @@ export default Plugin.define({
         context.ui?.toast?.show?.({ title: "Trim", message: "Sidebar set to " + next })
         return
       }
+      if (arg === "flush") {
+        const sid = activeSessionID
+        if (!sid) {
+          context.ui?.toast?.show?.({ title: "Trim", message: "No active session to flush" })
+          return
+        }
+        try {
+          const res = await withTimeout<any>(rpc.flush({ sessionID: sid }, context.location ? { location: context.location } : undefined))
+          context.ui?.toast?.show?.({
+            title: "Trim",
+            message: res?.queued ? "Flush queued - pruning will run on next turn" : "Flush unavailable (pruning disabled)",
+          })
+        } catch {
+          context.ui?.toast?.show?.({ title: "Trim", message: "Flush RPC failed" })
+        }
+        return
+      }
       const targetSessionID = activeSessionID
       const capturedGen = sessionGen
       const capturedState = { ...latestState }

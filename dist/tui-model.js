@@ -186,7 +186,7 @@ function totalSaved(snap) {
         }
     return any ? sum : null;
 }
-export const TRIM_VERSION = "0.11.5";
+export const TRIM_VERSION = "0.12.0";
 export const SECTION_TITLES = { context: "Context", optimization: "Optimization", compaction: "Compaction", memory: "Memory" };
 // Flat row model. Each row: key, section, kind (stat|warn), label, value, tone, line (compat).
 export function buildRows(raw, now = Date.now(), options = {}) {
@@ -937,6 +937,6 @@ export function buildGainReport(raw, now = Date.now(), options = {}) {
     for (const d of model.detailLines) {
         lines.push(`${d.text}`);
     }
-    lines.push("Tip: /trim minimal | normal | detail | toggle");
+    lines.push("Tip: /trim minimal | normal | detail | toggle | flush");
     return lines.join("\n");
 }

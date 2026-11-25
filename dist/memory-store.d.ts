@@ -144,5 +144,8 @@ export declare function openMemoryStore({ dbPath, retentionDays, maxResults, max
         maxChars?: number;
         now?: number;
     }): VaultLookupResult;
+    loadPruneDecisions(dropProject: unknown, sessionId: unknown, limit?: number, now?: number): string[];
+    savePruneDecisions(dropProject: unknown, sessionId: unknown, ids: Iterable<string>, now?: number): number;
+    clearPruneDecisions(dropProject: unknown, sessionId: unknown): void;
     close(): void;
 };

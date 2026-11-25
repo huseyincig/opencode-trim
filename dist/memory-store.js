@@ -472,7 +472,15 @@ const DERIVED_SQL = `
     text TEXT NOT NULL,
     UNIQUE(project, ref_id)
   );
-  CREATE INDEX IF NOT EXISTS vault_project_created ON vault(project, created_at, id);`;
+  CREATE INDEX IF NOT EXISTS vault_project_created ON vault(project, created_at, id);
+  CREATE TABLE IF NOT EXISTS prune_decisions (
+    project TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    drop_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (project, session_id, drop_id)
+  );
+  CREATE INDEX IF NOT EXISTS prune_decisions_session ON prune_decisions(project, session_id, created_at);`;
 /** True when `history` still carries the legacy global UNIQUE(event_id) constraint. */
 function hasGlobalEventIdUnique(db) {
     for (const ix of db.prepare('PRAGMA index_list(history)').all()) {
@@ -601,6 +609,7 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
     let updateAfterStmt, statsStmt, vaultStatsStmt, sessionCompactionsStmt, sessionLastReasonStmt;
     let sessionVaultStatsStmt, pruneStmt, vaultDeleteExpiredRefStmt, vaultInsertStmt, vaultHasStmt;
     let vaultGetStmt, vaultListStmt, vaultSearchCountStmt, vaultSearchPageStmt, vaultCountStmt, vaultEvictStmt, vaultPruneStmt;
+    let dropsLoadStmt, dropsInsertStmt, dropsCountStmt, dropsEvictStmt, dropsClearStmt, dropsPruneStmt;
     try {
         db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
         db.exec('PRAGMA journal_mode = DELETE; PRAGMA secure_delete = ON;');
@@ -718,10 +727,29 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
         SELECT id FROM vault WHERE project = ? ORDER BY created_at ASC, id ASC LIMIT ?
       )`);
         vaultPruneStmt = db.prepare('DELETE FROM vault WHERE created_at < ? AND project = ?');
+        dropsLoadStmt = db.prepare(`
+      SELECT drop_id FROM prune_decisions
+      WHERE project = ? AND session_id = ? AND created_at >= ?
+      ORDER BY created_at DESC
+      LIMIT ?`);
+        dropsInsertStmt = db.prepare(`
+      INSERT OR REPLACE INTO prune_decisions (project, session_id, drop_id, created_at)
+      VALUES (?, ?, ?, ?)`);
+        dropsCountStmt = db.prepare('SELECT count(*) AS c FROM prune_decisions WHERE project = ? AND session_id = ?');
+        dropsEvictStmt = db.prepare(`
+      DELETE FROM prune_decisions WHERE rowid IN (
+        SELECT rowid FROM prune_decisions
+        WHERE project = ? AND session_id = ?
+        ORDER BY created_at ASC, rowid ASC
+        LIMIT ?
+      )`);
+        dropsClearStmt = db.prepare('DELETE FROM prune_decisions WHERE project = ? AND session_id = ?');
+        dropsPruneStmt = db.prepare('DELETE FROM prune_decisions WHERE created_at < ? AND project = ?');
         if (typeof project === 'string' && project) {
             const cutoff = Date.now() - retentionMs;
             pruneStmt.run(cutoff, project); // drop expired rows on open
             vaultPruneStmt.run(cutoff, project);
+            dropsPruneStmt.run(cutoff, project);
         }
     }
     catch (error) {
@@ -1329,6 +1357,62 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
                 truncated,
                 text: body,
             };
+        },
+        loadPruneDecisions(dropProject, sessionId, limit = 4000, now = Date.now()) {
+            if (closed)
+                return [];
+            if (typeof dropProject !== 'string' || !dropProject || typeof sessionId !== 'string' || !sessionId)
+                return [];
+            const lim = clampInt(limit, 4000, 1, 4000);
+            const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+            const rows = dropsLoadStmt.all(dropProject, sessionId.slice(0, 256), t - retentionMs, lim);
+            return rows.map((r) => String(r.drop_id)).reverse();
+        },
+        savePruneDecisions(dropProject, sessionId, ids, now = Date.now()) {
+            if (closed)
+                return 0;
+            if (typeof dropProject !== 'string' || !dropProject || typeof sessionId !== 'string' || !sessionId)
+                return 0;
+            const sid = sessionId.slice(0, 256);
+            const batch = [];
+            for (const id of ids) {
+                if (typeof id === 'string' && id && id.length <= 512)
+                    batch.push(id);
+                if (batch.length >= 4000)
+                    break;
+            }
+            if (!batch.length)
+                return 0;
+            const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+            let inserted = 0;
+            db.exec('BEGIN IMMEDIATE');
+            try {
+                for (const id of batch) {
+                    dropsInsertStmt.run(dropProject, sid, id, t);
+                    inserted++;
+                }
+                const total = Number(dropsCountStmt.get(dropProject, sid)?.c ?? 0);
+                if (total > 4000)
+                    dropsEvictStmt.run(dropProject, sid, total - 4000);
+                db.exec('COMMIT');
+            }
+            catch (err) {
+                try {
+                    db.exec('ROLLBACK');
+                }
+                catch { }
+                throw err;
+            }
+            if (!memory)
+                secureFile(dbPath);
+            return inserted;
+        },
+        clearPruneDecisions(dropProject, sessionId) {
+            if (closed)
+                return;
+            if (typeof dropProject !== 'string' || !dropProject || typeof sessionId !== 'string' || !sessionId)
+                return;
+            dropsClearStmt.run(dropProject, sessionId.slice(0, 256));
         },
         close() {
             if (closed)

@@ -13,7 +13,7 @@ export declare function compactionHistory(messages: unknown): {
     lastAt: number | null;
     lastReason: string | null;
 } | null;
-export declare const TRIM_VERSION = "0.11.5";
+export declare const TRIM_VERSION = "0.12.0";
 export declare const SECTION_TITLES: Record<string, string>;
 export declare function buildRows(raw: any, now?: number, options?: any): any[];
 export declare function buildSections(raw: any, now?: number, options?: any): any[];

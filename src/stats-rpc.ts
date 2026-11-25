@@ -16,6 +16,23 @@ export const TRIM_STATS_RPC = {
       },
       output: { type: 'object' },
     },
+    flush: {
+      input: {
+        type: 'object',
+        properties: { sessionID: { type: 'string', minLength: 1, maxLength: 512 } },
+        required: ['sessionID'],
+        additionalProperties: false,
+      },
+      output: {
+        type: 'object',
+        properties: {
+          queued: { type: 'boolean' },
+          sessionID: { type: 'string' },
+        },
+        required: ['queued', 'sessionID'],
+        additionalProperties: false,
+      },
+    },
   },
   events: {
     changed: {

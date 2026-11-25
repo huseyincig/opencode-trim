@@ -46,6 +46,12 @@ export interface TrimOptions {
     readonly purgeErrorInputs: boolean;
     readonly pruneHistoricalReasoning: boolean;
     readonly pruneUnrelatedDiagnostics: boolean;
+    readonly supersedeWrites: boolean;
+    readonly pruneOldToolInputs: boolean;
+    readonly pruneAgedDiffs: boolean;
+    readonly pruneResolvedErrors: boolean;
+    readonly adaptivePruning: boolean;
+    readonly virtualizeOutputChars: number;
     readonly prunePreviewLines: number;
     readonly dedupeWindow: number;
     readonly cacheTtlMs: number;
@@ -85,6 +91,12 @@ export declare const DEFAULTS: Readonly<{
     purgeErrorInputs: true;
     pruneHistoricalReasoning: true;
     pruneUnrelatedDiagnostics: true;
+    supersedeWrites: true;
+    pruneOldToolInputs: true;
+    pruneAgedDiffs: true;
+    pruneResolvedErrors: true;
+    adaptivePruning: true;
+    virtualizeOutputChars: 32000;
     prunePreviewLines: 2;
     dedupeWindow: 8;
     cacheTtlMs: 300000;

@@ -20,6 +20,33 @@ export declare const TRIM_STATS_RPC: {
                 type: string;
             };
         };
+        flush: {
+            input: {
+                type: string;
+                properties: {
+                    sessionID: {
+                        type: string;
+                        minLength: number;
+                        maxLength: number;
+                    };
+                };
+                required: string[];
+                additionalProperties: boolean;
+            };
+            output: {
+                type: string;
+                properties: {
+                    queued: {
+                        type: string;
+                    };
+                    sessionID: {
+                        type: string;
+                    };
+                };
+                required: string[];
+                additionalProperties: boolean;
+            };
+        };
     };
     events: {
         changed: {

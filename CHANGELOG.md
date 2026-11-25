@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.12.0 — 2026-11-25
+
+- **Superseded Write & Aged Oversized Tool-Call Input Pruning (`src/prune.ts`, `src/config.ts`)**:
+  - **`supersedeWrites` (default `true`):** Prunes oversized `content`/`newString`/`oldString`/`patch` input payloads of earlier completed `write`/`edit`/`patch`/`apply_patch` calls once a later completed `read` or write touches the same canonical file path & scope, while preserving `filePath`, tool-call pairing, instruction files, and protected tails.
+  - **`pruneOldToolInputs` (default `true`):** Compacts aged oversized (`>= 1000` chars) non-write, non-sensitive `tool-call` string arguments outside the protected tail into a concise stub (`PRUNED_OLD_INPUT`) carrying token count and a secret-redacted 80-char head preview while keeping short metadata fields (`role`, `id`, `filePath`, `command`, `url`, `pattern`) intact.
+- **Span Collapse in `trim_reduce` & Explicit `/trim flush` (`src/prune.ts`, `src/plugin.ts`, `src/stats-rpc.ts`, `src/cache.ts`, `src/tui.tsx`, `src/tui-model.ts`)**:
+  - Upgraded opt-in `trim_reduce` with `scope: "span"` (`startIndex`, `endIndex`, optional redacted `summary`) to atomically collapse completed read-only `tool-call` + `tool-result` pairs outside the protected tail into a single concise historical breadcrumb without breaking provider role alternation, `call_id` pairing, writes, errors, or signed reasoning.
+  - Added `TRIM_STATS_RPC.methods.flush`, `ContextCache.requestFlush(sessionID)`, and `/trim flush` in the TUI slash command so users can bypass warm-cache deferral and force an immediate pruning sweep on the next turn.
+- **Persistent `plannedDrops` Across Restarts (`src/memory-store.ts`, `src/memory.ts`, `src/cache.ts`, `src/plugin.ts`)**:
+  - Added bounded `prune_decisions` table (`PRIMARY KEY (project, session_id, drop_id)`, capped at `MAX_PLANNED = 4000` per session, retention-pruned and cleared on `session.compaction.ended`, `session.deleted`, and `session.fork`) so committed pruning decisions survive server restarts and session reloads without resurrecting pruned history or busting prompt caches.
+- **Compact Notices, Pressure-Adaptive Thresholds, Aged Diffs & Resolved Verification Errors (`src/prune.ts`, `src/config.ts`)**:
+  - Trimmed `recoverableNotice`, `liveDiskNotice`, and `expiredNotice` phrasing while preserving every safety/redaction/untrusted-excerpt contract.
+  - **`adaptivePruning` (default `true`):** Under `force` (`>= 85%`) and `critical` (`>= 94%`) pressure, adaptively lowers effective `pruneMinResultChars` (`250` / `160`), lowers historical reasoning min chars (`160`), and reduces `prunePreviewLines` (`1` at force, `0` at critical).
+  - **`pruneAgedDiffs` (default `true`):** Under `force`/`critical` pressure, permits pure read-only `git diff`/`git show`/`git blame` outputs strictly older than `2 * protectRecentMessages` messages (excluding instruction/secret paths and mutating flags; `protectedShell()` unchanged) to be pruned and vaulted.
+  - **`pruneResolvedErrors` (default `true`):** Reclaims older failed verification shell outputs (`npm/pnpm/bun test|lint|check|typecheck|build`, `node --test`, `cargo`, `pytest`, `vitest`, `jest`, `tsc`, `eslint`, `biome` — excluding timeouts/kills) once a strictly later identical command succeeds cleanly.
+- **Zero-LLM Local Semantic Relevance Ranking (`src/prune.ts`, `src/plugin.ts`)**:
+  - Added `extractActiveTerms()` and `scorePruningRelevance()` combining `SessionWorkingState` (`activeFiles`, open `openErrors`) and recent tail context to rank pruning candidates so cold, finished sub-tasks and untouched directories are pruned before active-task files (`< 5 ms`, zero external LLM).
+- **Selective Ingestion Virtualization (`src/plugin.ts`, `src/config.ts`)**:
+  - Added `virtualizeOutputChars` (default `32000`, `0` disables): when `memory.enabled` is active and a non-live-disk, non-protected, non-error, unstructured ephemeral output remains `>= virtualizeOutputChars` after normal compression in `tool.execute.after`, stores the secret-redacted snapshot directly in `vault` and returns a compact 4-line head/tail preview + `recoverableNotice` immediately.
+- **Verification:** **`572 / 572`** tests passing across 31 suites (`npm run check` — strict `tsc --noEmit`, `dist/` build, 96-file syntax check, new `test/deep-pruning.test.ts` suite), zero circular imports, `npm run pack:dry` verified.
+
 ## 0.11.5 — 2026-11-25
 
 - **Vault Ergonomics & Live-Disk Shell Exclusion (`src/memory-store.ts`, `src/prune.ts`)**:

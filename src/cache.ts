@@ -87,11 +87,33 @@ function toolChars(event: any): number {
  * time (no halving), so only results older than the newest MAX_PLANNED drops can
  * be resurrected. This limitation is deliberate and tested.
  */
+export interface CachePersistence {
+  load?: (sessionID: string) => Iterable<string>;
+  save?: (sessionID: string, ids: Iterable<string>) => void;
+  clear?: (sessionID: string) => void;
+}
 export const MAX_PLANNED: number = 4000;
 export class ContextCache {
   sessions: Map<string, CacheSessionEntry>;
   observedCacheReads: Map<string, number>;
-  constructor(){this.sessions=new Map();this.observedCacheReads=new Map();}
+  flushRequests: Set<string>;
+  #persistence: CachePersistence | null;
+  constructor(){
+    this.sessions=new Map();
+    this.observedCacheReads=new Map();
+    this.flushRequests=new Set();
+    this.#persistence=null;
+  }
+  setPersistence(adapter: CachePersistence | null): void {
+    this.#persistence=adapter??null;
+  }
+  requestFlush(sessionID: unknown): boolean {
+    if(typeof sessionID!=='string'||!sessionID)return false;
+    this.flushRequests.delete(sessionID);
+    if(this.flushRequests.size>=128)this.flushRequests.delete(this.flushRequests.values().next().value as string);
+    this.flushRequests.add(sessionID);
+    return true;
+  }
   /** Record latest provider cache.read tokens from session.step.ended for warm/cold detection. */
   observeCacheRead(sessionID: unknown, cacheRead: unknown): void {
     if(typeof sessionID!=='string'||!sessionID)return;
@@ -113,14 +135,24 @@ export class ContextCache {
     const ttlMs=typeof opts?.cacheTtlMs==='number'&&Number.isFinite(opts.cacheTtlMs)&&opts.cacheTtlMs>0?opts.cacheTtlMs:0;
     const observedRead=kind==='context'?this.observedCacheReads.get(sid):undefined;
     if(kind==='context'&&observedRead!==undefined)this.observedCacheReads.delete(sid);
+    const forceFlush=kind==='context'&&this.flushRequests.delete(sid);
     const idleCold=kind==='context'&&ttlMs>0&&prevAt!==undefined&&(now-prevAt)>=ttlMs;
     const missCold=kind==='context'&&observedRead===0&&prevAt!==undefined;
-    const coldCache=idleCold||missCold;
+    const coldCache=idleCold||missCold||forceFlush;
     const warmCache=kind==='context'&&!coldCache&&!changed&&observedRead!==undefined&&observedRead>0;
     const prevStartBand=entry?.startBandAdmitted;
     const prevSizeMark=entry?.sizeMark;
     if(!entry){
-      entry={identity,plannedDrops:new Set(),startBandAdmitted:inStartBand,lastRequestAt:now,lastCacheRead:observedRead};
+      const hydrated=new Set<string>();
+      if(kind==='context'&&typeof this.#persistence?.load==='function'){
+        try{
+          for(const id of this.#persistence.load(sid)){
+            if(typeof id==='string'&&id)hydrated.add(id);
+            if(hydrated.size>=MAX_PLANNED)break;
+          }
+        }catch{/* best-effort hydration */}
+      }
+      entry={identity,plannedDrops:hydrated,startBandAdmitted:inStartBand,lastRequestAt:now,lastCacheRead:observedRead};
     }else if(changed){
       // A model/tool/system change is a natural provider-cache rebuild: it may
       // admit new decisions, but previously committed drops must keep replaying.
@@ -144,8 +176,8 @@ export class ContextCache {
     this.sessions.delete(key);this.sessions.set(key,entry);
     while(this.sessions.size>128)this.sessions.delete(this.sessions.keys().next().value as string);
     // Compaction is already a natural model request, whose history is about
-    // to be checkpointed. Cold cache (idle >= TTL or observed cache miss) has
-    // zero cache-bust penalty. Force pressure is a deliberate bounded cache bust.
+    // to be checkpointed. Cold cache (idle >= TTL, observed cache miss, or explicit
+    // flush) has zero deferral. Force pressure is a deliberate bounded cache bust.
     // Crossing pressureStartRatio (65%) from below also admits once.
     let allowNewDrops=kind==='compaction'||changed||coldCache||crossedStartBand||
       (typeof pressure?.ratio==='number' && pressure.ratio>=opts.pressureForceRatio);
@@ -161,16 +193,24 @@ export class ContextCache {
     if(!allowNewDrops&&chars>budget*1.25&&
       (entry.sizeMark===undefined||chars>=entry.sizeMark+budget*0.25))allowNewDrops=true;
     if(allowNewDrops&&chars>budget*1.25)entry.sizeMark=chars;
+    const persistence=this.#persistence;
     return {allowNewDrops,coldCache,warmCache,plannedDrops:entry.plannedDrops,
       finish(ids, finishOpts){
         if(finishOpts?.deferred===true){
           if(crossedStartBand)entry.startBandAdmitted=prevStartBand??false;
           entry.sizeMark=prevSizeMark;
         }
-        for(const id of ids)entry.plannedDrops.add(id);
+        const newlyAdded: string[]=[];
+        for(const id of ids){
+          if(!entry.plannedDrops.has(id))newlyAdded.push(id);
+          entry.plannedDrops.add(id);
+        }
         // In-place eviction keeps the Set handed out by begin() valid.
         while(entry.plannedDrops.size>MAX_PLANNED)
           entry.plannedDrops.delete(entry.plannedDrops.values().next().value as string);
+        if(kind==='context'&&newlyAdded.length>0&&typeof persistence?.save==='function'){
+          try{persistence.save(sid,newlyAdded);}catch{/* best-effort persistence */}
+        }
       }};
   }
   resetSession(sessionID: unknown): void {
@@ -178,6 +218,10 @@ export class ContextCache {
     this.sessions.delete(`context:${sessionID}`);
     this.sessions.delete(`compaction:${sessionID}`);
     this.observedCacheReads.delete(sessionID);
+    this.flushRequests.delete(sessionID);
+    if(typeof this.#persistence?.clear==='function'){
+      try{this.#persistence.clear(sessionID);}catch{/* best-effort clear */}
+    }
   }
-  clear(): void {this.sessions.clear();this.observedCacheReads.clear();}
+  clear(): void {this.sessions.clear();this.observedCacheReads.clear();this.flushRequests.clear();}
 }

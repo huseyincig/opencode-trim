@@ -17,11 +17,14 @@ export declare function evaluateCacheBreakEven(input: CacheBreakEvenInput): {
     reason: string;
 };
 export interface ReduceDirective {
-    scope: 'older_tools' | 'target';
+    scope: 'older_tools' | 'target' | 'span';
     target?: string;
     tool?: string;
     keepRecent?: number;
     applyNow?: boolean;
+    startIndex?: number;
+    endIndex?: number;
+    summary?: string;
 }
 export interface PruneResult {
     pruned: number;
@@ -40,6 +43,9 @@ export interface PruneVaultAdapter {
 export declare const PRUNED = "[opencode-trim: old tool output omitted from model context]";
 export declare const PRUNED_ERROR_INPUT = "[opencode-trim: oversized input of failed tool call omitted; error output preserved]";
 export declare const PRUNED_REASONING = "[opencode-trim: historical reasoning trace omitted]";
+export declare const PRUNED_SUPERSEDED_WRITE = "[opencode-trim: superseded write input omitted]";
+export declare const PRUNED_OLD_INPUT = "[opencode-trim: aged tool input omitted]";
+export declare const PRUNED_RESOLVED_ERROR = "[opencode-trim: resolved error output omitted \u2014 later rerun succeeded]";
 export declare function recoverableNotice(refId: string, tool?: string, tokens?: number, lines?: number, opts?: {
     truncated?: boolean;
 }): string;
@@ -47,6 +53,10 @@ export declare function liveDiskNotice(tool?: string, target?: string, tokens?: 
 export declare function expiredNotice(refId: string, tool?: string): string;
 export declare function buildPreviewNotice(original: string, notice: string, previewLines?: number): string;
 export declare function scorePruningCandidate(savedChars: number, suffixChars: number): number;
+/** Extract bounded active-task terms/paths from SessionWorkingState and the recent tail (zero-LLM, O(1) bounded). */
+export declare function extractActiveTerms(messages: any[], tail: number, workingState?: any): Set<string>;
+/** Deterministic zero-LLM relevance score in [0, 1] measuring overlap with active task files/terms. */
+export declare function scorePruningRelevance(entry: any, activeTerms: Set<string>): number;
 /** Hard per-message / per-request content-part budgets. Over budget fails closed (no pruning). */
 export declare const MAX_PARTS_PER_MESSAGE = 500;
 export declare const MAX_PARTS_TOTAL = 50000;

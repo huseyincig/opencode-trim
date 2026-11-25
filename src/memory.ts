@@ -203,7 +203,18 @@ export async function setupMemory(ctx: any, opts: any, hooks?: any): Promise<() 
         return store.hasVault(project, refId);
       },
     };
-    callHook(hooks?.onReady, { project, store, dbPath, vault, forgetSession });
+    const pruneDecisions = {
+      load(sessionID: string): string[] {
+        return store.loadPruneDecisions(project, sessionID);
+      },
+      save(sessionID: string, ids: Iterable<string>): void {
+        store.savePruneDecisions(project, sessionID, ids);
+      },
+      clear(sessionID: string): void {
+        store.clearPruneDecisions(project, sessionID);
+      },
+    };
+    callHook(hooks?.onReady, { project, store, dbPath, vault, pruneDecisions, forgetSession });
     const isAgentAllowed = (holder: any): boolean => {
       const agent = agentOf(holder);
       if (deny.size && (!agent || deny.has(agent))) return false;

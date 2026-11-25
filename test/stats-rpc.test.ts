@@ -16,7 +16,7 @@ test('RPC definition: id, snapshot method, changed event', () => {
   assert.deepEqual(TRIM_STATS_RPC.events.changed.schema, {
     type: 'object', properties: { sessionID: { type: 'string' }, revision: { type: 'number' } }, required: ['sessionID', 'revision'], additionalProperties: false,
   });
-  assert.deepEqual(Object.keys(TRIM_STATS_RPC.methods), ['snapshot']);
+  assert.deepEqual(Object.keys(TRIM_STATS_RPC.methods), ['snapshot', 'flush']);
   assert.deepEqual(Object.keys(TRIM_STATS_RPC.events), ['changed']);
 });
 

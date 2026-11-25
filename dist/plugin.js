@@ -5,7 +5,7 @@ import { parseOptions } from "./config.js";
 import { CODE, hasFailureText, isExitNotice, MAX_LINE, STACK, WARNING } from "./diagnostics.js";
 import { isProtectedCommand } from "./filters.js";
 import { compressOutput, compactListPaths, dedupToolOutput, looksStructured, stripAnsi } from "./compress.js";
-import { isTrimMeshProtected, pruneContext } from "./prune.js";
+import { buildPreviewNotice, isLiveDiskOutput, isTrimMeshProtected, pruneContext, recoverableNotice } from "./prune.js";
 import { setupMemory, memoryDbBytes } from "./memory.js";
 import { createTrimStats } from "./stats.js";
 import { TRIM_STATS_RPC } from "./stats-rpc.js";
@@ -570,6 +570,39 @@ export function processToolEvent(event, options, sink, runtime) {
             }
         }
     }
+    const virtThreshold = typeof options.virtualizeOutputChars === 'number' && Number.isSafeInteger(options.virtualizeOutputChars) ? options.virtualizeOutputChars : 0;
+    const virtVault = runtime?.vault && typeof runtime.vault.store === 'function' && typeof runtime.vault.has === 'function' ? runtime.vault : null;
+    if (!usedDedupeStub && !isRead && virtThreshold > 0 && virtVault && event?.codemode !== true && (!shell || code === undefined || code === 0) && !primaryNoticePresent && primaryRaw !== null && primaryFinal !== null && primaryFinal.length >= virtThreshold && !isLiveDiskOutput(event.tool, event.input) && (!shell || !isProtectedCommand(command))) {
+        const strippedRaw = primaryRaw.includes('\x1b') ? stripAnsi(primaryRaw) : primaryRaw;
+        const strippedFinal = primaryFinal === primaryRaw ? strippedRaw : (primaryFinal.includes('\x1b') ? stripAnsi(primaryFinal) : primaryFinal);
+        const virtSafe = !looksStructured(strippedRaw) && !looksStructured(strippedFinal) && !strippedRaw.includes('\u0000') && !strippedFinal.includes('\u0000') && !isExitNotice(primaryRaw) && !/\btimed out\b/i.test(primaryRaw) && !hasDedupeDiagnostic(strippedRaw) && !hasDedupeDiagnostic(strippedFinal);
+        if (virtSafe) {
+            const refId = `trm_${createHash('sha256').update(`${sid ?? ''}\0virt\0${event.tool}\0${command}\0${primaryFinal}`).digest('hex').slice(0, 32)}`;
+            try {
+                virtVault.store(refId, { name: event.tool, input: event.input, original: primaryFinal, length: primaryFinal.length }, sid);
+            }
+            catch { /* best-effort vault store */ }
+            if (virtVault.has(refId)) {
+                const lines = primaryFinal.split('\n').length;
+                const estTok = Math.max(1, Math.ceil(primaryFinal.length / 3));
+                const notice = recoverableNotice(refId, event.tool, estTok, lines, { truncated: primaryFinal.length > 1_000_000 });
+                const stub = buildPreviewNotice(primaryFinal, notice, 4);
+                if (stub.length < primaryFinal.length && (!shell || keepsNotice(primaryRaw, stub))) {
+                    const extraSaved = Math.max(0, primaryFinal.length - stub.length);
+                    if (typeof content === 'string') {
+                        nextContent = stub;
+                    }
+                    else if (Array.isArray(nextContent) && obj(nextContent[0])) {
+                        nextContent[0] = { ...nextContent[0], text: stub };
+                    }
+                    firstOriginal = primaryRaw;
+                    firstNext = stub;
+                    changed = true;
+                    saved += extraSaved;
+                }
+            }
+        }
+    }
     if (!changed) {
         if (dedupeSafe && primaryFinal !== null) {
             ring.record(sid, event.tool, dedupeKey, primaryFinal, false);
@@ -793,7 +826,7 @@ export async function setupTrim(ctx) {
             const pendingDirectives = sid && kind === 'context' ? reduceQueue.get(sid) : undefined;
             const forceApplyNow = !!pendingDirectives?.some((d) => d.applyNow === true);
             const effectiveGate = forceApplyNow ? { ...gate, allowNewDrops: true } : gate;
-            const result = pruneContext(event, opts, { pressure, ...effectiveGate, directory: localDir, ...(pendingDirectives?.length ? { reduceDirectives: pendingDirectives } : {}), ...(activeVault ? { vault: activeVault } : {}) });
+            const result = pruneContext(event, opts, { pressure, ...effectiveGate, directory: localDir, ...(sid ? { workingState: workingState.snapshot(sid) } : {}), ...(pendingDirectives?.length ? { reduceDirectives: pendingDirectives } : {}), ...(activeVault ? { vault: activeVault } : {}) });
             if (sid && result.consumedDirectives)
                 reduceQueue.delete(sid);
             if (sid && result.pruned > 0)
@@ -921,7 +954,7 @@ export async function setupTrim(ctx) {
                         return;
                     const sessionID = toolSessionOf(event);
                     const effOpts = sessionID ? effectiveToolOptions(opts, sessionPressure.get(sessionID)) : opts;
-                    const rt = { directory: localDir, dedupeRing, workingState, sessionID };
+                    const rt = { directory: localDir, dedupeRing, workingState, sessionID, vault: activeVault };
                     if (!stats)
                         processToolEvent(event, effOpts, undefined, rt);
                     else {
@@ -958,14 +991,17 @@ export async function setupTrim(ctx) {
                 registrations.push(valid(await ctx.tool.transform((editor) => {
                     editor.add({
                         name: 'trim_reduce',
-                        description: 'Queue older or targeted read-only tool outputs in the current session for cache-safe pruning. Pruned items are archived to the project vault when memory is enabled and can be restored with trim_expand. Recent turns, errors, writes, and protected files are never pruned.',
+                        description: 'Queue older, targeted, or span-collapsed read-only tool outputs in the current session for cache-safe pruning. Pruned items are archived to the project vault when memory is enabled and can be restored with trim_expand. Recent turns, errors, writes, and protected files are never pruned.',
                         input: {
                             type: 'object',
                             properties: {
-                                scope: { type: 'string', enum: ['older_tools', 'target'], description: '"older_tools" queues eligible older tool outputs; "target" filters by target substring and/or tool name.' },
+                                scope: { type: 'string', enum: ['older_tools', 'target', 'span'], description: '"older_tools" queues eligible older tool outputs; "target" filters by target substring and/or tool name; "span" atomically collapses completed read-only tool-call/result pairs within startIndex..endIndex.' },
                                 target: { type: 'string', maxLength: 256, description: 'Optional case-insensitive path or command substring filter (used when scope is "target").' },
                                 tool: { type: 'string', maxLength: 64, description: 'Optional tool name filter (e.g. "read", "grep", "shell").' },
                                 keepRecent: { type: 'integer', minimum: 1, maximum: 20, description: 'Minimum recent tool results to keep untouched (default 4; protectRecentMessages still applies).' },
+                                startIndex: { type: 'integer', minimum: 0, maximum: 10000, description: 'Optional inclusive start message index for scope "span".' },
+                                endIndex: { type: 'integer', minimum: 0, maximum: 10000, description: 'Optional inclusive end message index for scope "span".' },
+                                summary: { type: 'string', maxLength: 1200, description: 'Optional concise technical summary for scope "span" (redacted & tagged as untrusted historical note).' },
                                 applyNow: { type: 'boolean', description: 'If false (default), applies at the next cache-safe window; if true, applies on the very next turn.' },
                             },
                             required: ['scope'],
@@ -991,16 +1027,30 @@ export async function setupTrim(ctx) {
                             if (!sid)
                                 throw new Error('trim_reduce requires an active sessionID');
                             const scope = input?.scope;
-                            if (scope !== 'older_tools' && scope !== 'target')
-                                throw new Error('scope must be "older_tools" or "target"');
+                            if (scope !== 'older_tools' && scope !== 'target' && scope !== 'span')
+                                throw new Error('scope must be "older_tools", "target", or "span"');
                             const target = input?.target !== undefined && input?.target !== null ? String(input.target).trim() : undefined;
                             const tool = input?.tool !== undefined && input?.tool !== null ? String(input.tool).trim() : undefined;
+                            const summary = input?.summary !== undefined && input?.summary !== null ? String(input.summary).trim() : undefined;
                             if (target && target.length > 256)
                                 throw new Error('target must be up to 256 chars');
                             if (tool && tool.length > 64)
                                 throw new Error('tool must be up to 64 chars');
+                            if (summary && summary.length > 1200)
+                                throw new Error('summary must be up to 1200 chars');
                             if (scope === 'target' && !target && !tool)
                                 throw new Error('scope "target" requires target or tool');
+                            const startIndex = input?.startIndex !== undefined && input?.startIndex !== null ? input.startIndex : undefined;
+                            const endIndex = input?.endIndex !== undefined && input?.endIndex !== null ? input.endIndex : undefined;
+                            if (startIndex !== undefined && (typeof startIndex !== 'number' || !Number.isInteger(startIndex) || startIndex < 0 || startIndex > 10000)) {
+                                throw new Error('startIndex must be an integer between 0 and 10000');
+                            }
+                            if (endIndex !== undefined && (typeof endIndex !== 'number' || !Number.isInteger(endIndex) || endIndex < 0 || endIndex > 10000)) {
+                                throw new Error('endIndex must be an integer between 0 and 10000');
+                            }
+                            if (startIndex !== undefined && endIndex !== undefined && endIndex < startIndex) {
+                                throw new Error('endIndex must be >= startIndex');
+                            }
                             const keepRecent = input?.keepRecent !== undefined && input?.keepRecent !== null ? input.keepRecent : 4;
                             if (typeof keepRecent !== 'number' || !Number.isInteger(keepRecent) || keepRecent < 1 || keepRecent > 20) {
                                 throw new Error('keepRecent must be an integer between 1 and 20');
@@ -1009,7 +1059,7 @@ export async function setupTrim(ctx) {
                             const list = reduceQueue.get(sid) ?? [];
                             if (list.length >= 8)
                                 list.shift();
-                            list.push({ scope, ...(target ? { target } : {}), ...(tool ? { tool } : {}), keepRecent, applyNow });
+                            list.push({ scope, ...(target ? { target } : {}), ...(tool ? { tool } : {}), ...(startIndex !== undefined ? { startIndex } : {}), ...(endIndex !== undefined ? { endIndex } : {}), ...(summary ? { summary } : {}), keepRecent, applyNow });
                             reduceQueue.delete(sid);
                             if (reduceQueue.size >= 128)
                                 reduceQueue.delete(reduceQueue.keys().next().value);
@@ -1036,7 +1086,14 @@ export async function setupTrim(ctx) {
         // No host `compaction.auto` exists: count observed compaction events by their reason instead.
         try {
             if (typeof ctx?.rpc?.register === 'function') {
-                rpcReg = await ctx.rpc.register(TRIM_STATS_RPC, { snapshot: async (input) => stats.snapshot(input?.sessionID) });
+                rpcReg = await ctx.rpc.register(TRIM_STATS_RPC, {
+                    snapshot: async (input) => stats.snapshot(input?.sessionID),
+                    flush: async (input) => {
+                        const sid = typeof input?.sessionID === 'string' && input.sessionID ? input.sessionID : '';
+                        const queued = sid && opts.pruning ? cache.requestFlush(sid) : false;
+                        return { queued, sessionID: sid };
+                    },
+                });
                 if (!rpcReg || typeof rpcReg.dispose !== 'function')
                     rpcReg = null;
             }
@@ -1125,9 +1182,10 @@ export async function setupTrim(ctx) {
         // Memory is optional; a failure must not disable Trim itself.
         try {
             memoryStop = await setupMemory(ctx, opts, {
-                onReady: ({ project, store, dbPath, vault, forgetSession }) => {
+                onReady: ({ project, store, dbPath, vault, pruneDecisions, forgetSession }) => {
                     activeVault = vault ?? null;
                     forgetMemorySession = typeof forgetSession === 'function' ? forgetSession : null;
+                    cache.setPersistence(pruneDecisions ?? null);
                     if (stats) {
                         stats.setMemoryProvider((sid) => ({
                             ...(typeof store.sidebarStats === 'function' ? store.sidebarStats(project, sid) : store.stats(project)),
@@ -1140,6 +1198,7 @@ export async function setupTrim(ctx) {
                 onClose: () => {
                     activeVault = null;
                     forgetMemorySession = null;
+                    cache.setPersistence(null);
                     if (stats) {
                         stats.setMemoryProvider(null);
                         stats.setMemoryState({ active: false });
@@ -1183,6 +1242,7 @@ export async function setupTrim(ctx) {
             await Promise.resolve().then(memoryStop).catch(() => { });
         await Promise.allSettled(registrations.reverse().map(reg => Promise.resolve().then(() => reg.dispose())));
         await dispose();
+        cache.setPersistence(null);
         cache.clear();
         dedupeRing.clear();
         workingState.clear();
