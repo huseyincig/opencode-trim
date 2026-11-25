@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.2 — 2026-11-25
+
+- **Critical Fix: Eliminate Adaptive-Pruning Token Oscillation (`src/prune.ts`, `src/cache.ts`)**:
+  - **Root Cause:** When adaptive pruning crossed `force` (`>= 85%`) or `critical` (`>= 94%`) and reclaimed `< 800`-char tool results, `< 800`-char reasoning blocks, aged read-only diffs, and preview lines, the resulting token drop pushed the next turn's provider ratio back below `85%`. On that turn, `effMinResultChars` / `effMinReasoningChars` / `allowAgedDiffs` / `effPreviewLines` reverted to normal-band thresholds, causing `candidates()` to skip already-committed `plannedDrops` IDs and resurrect ~40k tokens every alternate turn (`250k → 205k → 250k → 205k`).
+  - **Monotonic High-Water `adaptiveTier` Latch (`src/cache.ts`, `src/prune.ts`):** `ContextCache` now latches each session's `adaptiveTier` (`0` normal → `1` force → `2` critical) monotonically until `resetSession()` (`session.compaction.ended` / `session.deleted` / `session.fork`), keeping adaptive thresholds and `effPreviewLines` byte-identical across turns without breaking warm-cache deferral.
+  - **Pressure-Independent `plannedDrops` Replay (`src/prune.ts`):** `candidates()` now always collects any already-committed `plannedDrops` ID (for `< 800`-char tool results, `< 800`-char reasoning, aged read-only diffs, and resolved verification errors) and `protectedEntry` never lets `keepRecentToolResults` re-capture a previously committed drop, guaranteeing zero resurrection even after server restarts.
+- **Verification:** **`578 / 578`** tests passing across 31 suites (`npm run check` — strict `tsc --noEmit`, `dist/` build, 96-file syntax check, new multi-turn + post-restart zero-oscillation regression test in `test/deep-pruning.test.ts`).
+
 ## 0.12.1 — 2026-11-25
 
 - **Full Debug & Hardening Pass (`src/prune.ts`, `src/cache.ts`, `src/plugin.ts`, `src/memory-store.ts`)**:

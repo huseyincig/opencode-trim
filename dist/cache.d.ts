@@ -6,6 +6,7 @@ export interface CacheGate {
     coldCache: boolean;
     warmCache: boolean;
     forceFlush?: boolean;
+    adaptiveTier?: 0 | 1 | 2;
     plannedDrops: Set<string>;
     finish: (ids: Iterable<string>, opts?: {
         deferred?: boolean;
@@ -16,6 +17,7 @@ export interface CacheSessionEntry {
     plannedDrops: Set<string>;
     sizeMark?: number;
     startBandAdmitted?: boolean;
+    adaptiveTier?: 0 | 1 | 2;
     lastRequestAt?: number;
     lastCacheRead?: number;
 }

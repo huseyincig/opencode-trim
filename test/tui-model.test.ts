@@ -218,8 +218,8 @@ test("sections: ordered, only non-empty, label/value/tone/bar exposed", () => {
 })
 
 test("header: title with version, summary only collapsed, marker", () => {
-  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.12.1", summary: "68% | -106k | 12 | mem off", marker: "" })
-  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.12.1", summary: "", marker: "!" })
+  assert.deepEqual(buildHeader(snap(), { expanded: false }), { title: "+ trim v0.12.2", summary: "68% | -106k | 12 | mem off", marker: "" })
+  assert.deepEqual(buildHeader(snap(), { expanded: true, stale: true }), { title: "- trim v0.12.2", summary: "", marker: "!" })
   assert.equal(buildHeader(null).marker, "?")
   for (const h of [buildHeader(snap()), buildHeader(null, { expanded: true })]) assert.ok(isAscii(h.title + h.summary + h.marker))
 })
@@ -524,7 +524,7 @@ test("buildGainReport: produces pure ASCII savings and composition breakdown for
     memory: { enabled: true, active: true, summaries: 3, vaultRefs: 12, dbBytes: 4096 },
   }), T0, { nativeTokens: 106000, nativeLimitTokens: 1000000 })
   assert.ok(rep.split("\n").every((l) => isAscii(l)), rep)
-  assert.match(rep, /Trim v0\.12\.1 \(healthy\)/)
+  assert.match(rep, /Trim v0\.12\.2 \(healthy\)/)
   assert.match(rep, /Context: context 106k\/350k \| 30% \(1M\)/)
   assert.match(rep, /Composition \(est\): sys 10% \| chat 24% \| tools 66%/)
   assert.match(rep, /Savings: -106k chars/)

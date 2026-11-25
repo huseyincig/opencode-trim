@@ -845,3 +845,75 @@ test('DBG-11 & DBG-13: span collapse preserves pruned-char accounting across spl
   pruneContext({ sessionID: 's-dbg13', messages: mMsgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20000 } });
   assert.match(mMsgs[1].content[0].result.value, /ERROR lint/, 'env-prefixed mutating eslint --fix error must never be treated as resolved read-only verification');
 });
+
+test('v0.12.2 regression: committed adaptive drops (small outputs, short reasoning, aged diffs, preview lines) NEVER oscillate or resurrect when pressure drops below force/critical', () => {
+  const opts = parseOptions({
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneAfterToolChars: 10000,
+    pruneMinResultChars: 800,
+    prunePreviewLines: 2,
+  });
+
+  const makeTurn = () => [
+    { id: 'gd-c', role: 'assistant', content: [{ type: 'tool-call', id: 'c-gd', name: 'shell', input: { command: 'git diff src/old.ts' } }] },
+    { id: 'gd-r', role: 'tool', content: [{ type: 'tool-result', id: 'c-gd', name: 'shell', result: { type: 'text', value: 'diff --git a/src/old.ts b/src/old.ts\n' + '+line\n'.repeat(250) } }] },
+    {
+      id: 'sm-c',
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', text: 'short historical reasoning '.repeat(12) }, // ~324 chars (< 800!)
+        { type: 'tool-call', id: 'c-sm', name: 'shell', input: { command: 'echo small' } },
+      ],
+    },
+    { id: 'sm-r', role: 'tool', content: [{ type: 'tool-result', id: 'c-sm', name: 'shell', result: { type: 'text', value: 'small output row\n'.repeat(20) } }] }, // ~340 chars (< 800!)
+    { id: 'big-c', role: 'assistant', content: [{ type: 'tool-call', id: 'c-big', name: 'shell', input: { command: 'echo big' } }] },
+    { id: 'big-r', role: 'tool', content: [{ type: 'tool-result', id: 'c-big', name: 'shell', result: { type: 'text', value: Array.from({ length: 40 }, (_, i) => `big line ${i} padding text`).join('\n') } }] },
+    { id: 'rec-c', role: 'assistant', content: [{ type: 'tool-call', id: 'c-rec', name: 'shell', input: { command: 'echo latest' } }] },
+    { id: 'rec-r', role: 'tool', content: [{ type: 'tool-result', id: 'c-rec', name: 'shell', result: { type: 'text', value: 'latest result ' + 'k'.repeat(900) } }] },
+    { id: 'f1', role: 'user', content: [{ type: 'text', text: 'step 1' }] },
+    { id: 'f2', role: 'assistant', content: [{ type: 'text', text: 'step 2' }] },
+    { id: 'f3', role: 'user', content: [{ type: 'text', text: 'step 3' }] },
+    { id: 'f4', role: 'assistant', content: [{ type: 'text', text: 'step 4' }] },
+    ...makeTail(6),
+  ];
+
+  const vaultMap = new Map<string, string>();
+  const vault = { store: (id: string, e: any) => { vaultMap.set(id, e.original); return true; }, has: (id: string) => vaultMap.has(id) };
+  const cache = new ContextCache();
+
+  // Turn 1: pressure hits critical (0.96) -> adaptive drops aged diff, <800-char result, <800-char reasoning, previewLines=0
+  const msgs1 = makeTurn();
+  const ev1 = { sessionID: 's-osc', model: { providerID: 'p', id: 'm' }, system: [], tools: {}, messages: msgs1 };
+  const g1 = cache.begin(ev1, opts, { ratio: 0.96, usableTokens: 20000 }, 'context', 1000);
+  const r1 = pruneContext(ev1, opts, { ...g1, pressure: { ratio: 0.96, usableTokens: 20000 }, vault });
+  g1.finish(r1.plannedIds, { deferred: r1.warmCacheDeferred === true });
+  assert.ok(r1.pruned >= 4, `Turn 1 should prune all 4 targets, got ${r1.pruned}`);
+
+  // Turn 2: because Turn 1 dropped 40k tokens, provider reports ratio = 0.80 (< 0.85 force!)
+  // MUST replay ALL 4 drops byte-identically — ZERO resurrection, ZERO preview-line flip!
+  const msgs2 = makeTurn();
+  const ev2 = { sessionID: 's-osc', model: { providerID: 'p', id: 'm' }, system: [], tools: {}, messages: msgs2 };
+  const g2 = cache.begin(ev2, opts, { ratio: 0.80, usableTokens: 20000 }, 'context', 2000);
+  const r2 = pruneContext(ev2, opts, { ...g2, pressure: { ratio: 0.80, usableTokens: 20000 }, vault });
+  g2.finish(r2.plannedIds, { deferred: r2.warmCacheDeferred === true });
+
+  assert.equal(msgs2[1].content[0].result.value, msgs1[1].content[0].result.value, 'aged git diff must NOT resurrect when ratio drops to 0.80');
+  assert.equal(msgs2[2].content[0].text, msgs1[2].content[0].text, '<800-char reasoning must NOT resurrect when ratio drops to 0.80');
+  assert.equal(msgs2[3].content[0].result.value, msgs1[3].content[0].result.value, '<800-char tool result must NOT resurrect when ratio drops to 0.80');
+  assert.equal(msgs2[5].content[0].result.value, msgs1[5].content[0].result.value, 'big tool result notice must stay byte-identical (no preview-line oscillation)');
+
+  // Turn 3: even after a simulated server restart (fresh ContextCache, ratio = 0.70, ONLY persisted plannedDrops):
+  // committed <800-char results, <800-char reasoning, and aged diffs MUST STILL replay!
+  const msgs3 = makeTurn();
+  const r3 = pruneContext(
+    { sessionID: 's-osc', messages: msgs3 },
+    opts,
+    { allowNewDrops: false, plannedDrops: new Set(g2.plannedDrops), pressure: { ratio: 0.70, usableTokens: 20000 }, vault },
+  );
+  assert.ok(r3.pruned >= 4, `Post-restart replay must replay all 4 committed drops, got ${r3.pruned}`);
+  assert.match(msgs3[1].content[0].result.value, /RECOVERABLE, not lost/);
+  assert.equal(msgs3[2].content[0].text, '[opencode-trim: historical reasoning trace omitted]');
+  assert.match(msgs3[3].content[0].result.value, /RECOVERABLE, not lost/);
+});

@@ -140,6 +140,11 @@ export class ContextCache {
         const warmCache = kind === 'context' && !coldCache && !changed && observedRead !== undefined && observedRead > 0;
         const prevStartBand = entry?.startBandAdmitted;
         const prevSizeMark = entry?.sizeMark;
+        const curTier = kind === 'context' && typeof pressure?.ratio === 'number' && Number.isFinite(pressure.ratio)
+            ? (pressure.ratio >= opts.pressureCriticalRatio ? 2 : pressure.ratio >= opts.pressureForceRatio ? 1 : 0)
+            : 0;
+        const prevTier = entry?.adaptiveTier ?? 0;
+        const adaptiveTier = curTier > prevTier ? curTier : prevTier;
         if (!entry) {
             const hydrated = new Set();
             if (kind === 'context' && typeof this.#persistence?.load === 'function') {
@@ -153,7 +158,7 @@ export class ContextCache {
                 }
                 catch { /* best-effort hydration */ }
             }
-            entry = { identity, plannedDrops: hydrated, startBandAdmitted: inStartBand, lastRequestAt: now, lastCacheRead: observedRead };
+            entry = { identity, plannedDrops: hydrated, startBandAdmitted: inStartBand, adaptiveTier, lastRequestAt: now, lastCacheRead: observedRead };
         }
         else if (changed) {
             // A model/tool/system change is a natural provider-cache rebuild: it may
@@ -163,11 +168,13 @@ export class ContextCache {
             entry.identity = identity;
             entry.sizeMark = undefined;
             entry.startBandAdmitted = inStartBand;
+            entry.adaptiveTier = adaptiveTier;
             entry.lastRequestAt = now;
             entry.lastCacheRead = observedRead;
         }
         else {
             entry.lastRequestAt = now;
+            entry.adaptiveTier = adaptiveTier;
             if (observedRead !== undefined)
                 entry.lastCacheRead = observedRead;
             if (!inStartBand) {
@@ -203,7 +210,7 @@ export class ContextCache {
         if (allowNewDrops && chars > budget * 1.25)
             entry.sizeMark = chars;
         const persistence = this.#persistence;
-        return { allowNewDrops, coldCache, warmCache, forceFlush, plannedDrops: entry.plannedDrops,
+        return { allowNewDrops, coldCache, warmCache, forceFlush, adaptiveTier, plannedDrops: entry.plannedDrops,
             finish(ids, finishOpts) {
                 if (finishOpts?.deferred === true) {
                     if (crossedStartBand)

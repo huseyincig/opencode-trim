@@ -1124,6 +1124,7 @@ interface CandidateContext {
   effMinReasoningChars: number;
   allowAgedDiffs: boolean;
   agedDiffCutoff: number;
+  plannedDrops: Set<string>;
 }
 /** Pair by call id in source order, never join an unrelated earlier assistant call. */
 function candidates(event: any, opts: any, baseDir?: string, ctx?: CandidateContext): {
@@ -1137,6 +1138,7 @@ function candidates(event: any, opts: any, baseDir?: string, ctx?: CandidateCont
   const minReasonChars=ctx?.effMinReasoningChars??opts.pruneMinResultChars;
   const allowAgedDiffs=ctx?.allowAgedDiffs===true;
   const agedDiffCutoff=ctx?.agedDiffCutoff??0;
+  const planned=ctx?.plannedDrops instanceof Set?ctx.plannedDrops:new Set<string>();
   const pending=new Map<string, any[]>();
   const out: any[]=[];
   const fileWrites: Array<{ mi: number; pi: number; path: string; scope: string }>=[];
@@ -1160,12 +1162,15 @@ function candidates(event: any, opts: any, baseDir?: string, ctx?: CandidateCont
     const role=data(msg,'role')??data(msg,'type');
     if(role==='assistant'&&opts.pruneHistoricalReasoning!==false&&!hasReasoningSignature(msg)&&!isTrimMeshProtected(msg,msg,event?.sessionID)){
       const rc=data(msg,'reasoning_content');
-      if(typeof rc==='string'&&rc!==PRUNED_REASONING&&rc.length>=minReasonChars&&writable(msg,'reasoning_content')){
-        out.push({
-          id:`reasoning:msg:${fingerprint(rc)}:${msgId}`,mi,pi:-1,name:'reasoning',input:{},
-          accessor:{get:()=>data(msg,'reasoning_content'),set:(v: string)=>{msg.reasoning_content=v;}},
-          length:rc.length,supKey:'',range:undefined,original:rc,isReasoning:true,
-        });
+      if(typeof rc==='string'&&rc!==PRUNED_REASONING&&rc.length>=Math.min(minReasonChars,100)&&writable(msg,'reasoning_content')){
+        const id=`reasoning:msg:${fingerprint(rc)}:${msgId}`;
+        if(rc.length>=minReasonChars||planned.has(id)){
+          out.push({
+            id,mi,pi:-1,name:'reasoning',input:{},
+            accessor:{get:()=>data(msg,'reasoning_content'),set:(v: string)=>{msg.reasoning_content=v;}},
+            length:rc.length,supKey:'',range:undefined,original:rc,isReasoning:true,
+          });
+        }
       }
     }
     for(let pi=0;pi<content.length;pi++){
@@ -1175,12 +1180,15 @@ function candidates(event: any, opts: any, baseDir?: string, ctx?: CandidateCont
         if(!trapped(part)&&!hasMedia(part)&&!hasReasoningSignature(part)&&!isTrimMeshProtected(part,msg,event?.sessionID)){
           const field=typeof data(part,'text')==='string'?'text':(typeof data(part,'reasoning')==='string'?'reasoning':null);
           const val=field?data(part,field):undefined;
-          if(field&&typeof val==='string'&&val!==PRUNED_REASONING&&val.length>=minReasonChars&&writable(part,field)){
-            out.push({
-              id:`reasoning:${pi}:${fingerprint(val)}:${msgId}`,mi,pi,name:'reasoning',input:{},
-              accessor:{get:()=>data(part,field),set:(v: string)=>{part[field]=v;}},
-              length:val.length,supKey:'',range:undefined,original:val,isReasoning:true,
-            });
+          if(field&&typeof val==='string'&&val!==PRUNED_REASONING&&val.length>=Math.min(minReasonChars,100)&&writable(part,field)){
+            const id=`reasoning:${pi}:${fingerprint(val)}:${msgId}`;
+            if(val.length>=minReasonChars||planned.has(id)){
+              out.push({
+                id,mi,pi,name:'reasoning',input:{},
+                accessor:{get:()=>data(part,field),set:(v: string)=>{part[field]=v;}},
+                length:val.length,supKey:'',range:undefined,original:val,isReasoning:true,
+              });
+            }
           }
         }
         continue;
@@ -1211,11 +1219,13 @@ function candidates(event: any, opts: any, baseDir?: string, ctx?: CandidateCont
           const vk=verificationKey(input);
           const a=vk?accessor(part):null;
           const errText=a?a.get():undefined;
-          if(vk&&a&&typeof errText==='string'&&errText.length>=minResChars&&!errText.includes(PRUNED_RESOLVED_ERROR)&&!structured(errText)&&!statusNotice(errText)){
-            failedShells.push({
-              id:`reserr:${safeString(callId)||'?'}:${fingerprint(errText)}:${msgId}`,
-              mi,pi,name,input,accessor:a,length:errText.length,supKey:vk,range:undefined,original:errText,isResolvedError:true,
-            });
+          if(vk&&a&&typeof errText==='string'&&errText.length>=Math.min(minResChars,100)&&!errText.includes(PRUNED_RESOLVED_ERROR)&&!structured(errText)&&!statusNotice(errText)){
+            const id=`reserr:${safeString(callId)||'?'}:${fingerprint(errText)}:${msgId}`;
+            if(errText.length>=minResChars||planned.has(id)){
+              failedShells.push({
+                id,mi,pi,name,input,accessor:a,length:errText.length,supKey:vk,range:undefined,original:errText,isResolvedError:true,
+              });
+            }
           }
         }
         continue;
@@ -1264,8 +1274,8 @@ function candidates(event: any, opts: any, baseDir?: string, ctx?: CandidateCont
       if(trapped(input))continue;
       if(isLiveDiskTool(name)&&touchesInstructionTarget(input))continue;
       const ro=readOnlyCommand(name,input);
-      const agedDiff=!ro&&(name==='shell'||name==='bash')&&allowAgedDiffs&&mi<agedDiffCutoff&&isAgedReadOnlyDiff(data(input,'command'));
-      if(!ro&&!agedDiff)continue;
+      const isDiffCmd=!ro&&(name==='shell'||name==='bash')&&isAgedReadOnlyDiff(data(input,'command'));
+      if(!ro&&!isDiffCmd)continue;
       if(type==='tool-result'&&call&&ro&&!msgHasSignedReasoning(call.msg)){
         const rawT=data(input,'filePath')??data(input,'path')??data(input,'command')??data(input,'pattern')??'';
         pairedReadOnly.push({
@@ -1276,18 +1286,21 @@ function candidates(event: any, opts: any, baseDir?: string, ctx?: CandidateCont
       }
       const a=accessor(part);if(!a)continue;
       const text=a.get();
-      if(typeof text!=='string'||!text||text===PRUNED||text.includes(PRUNED)||text.includes('[opencode-trim: omitted ')||text.includes(PRUNED_RESOLVED_ERROR)||text.length<minResChars||structured(text)||diagnosticText(text))continue;
+      if(typeof text!=='string'||!text||text===PRUNED||text.includes(PRUNED)||text.includes('[opencode-trim: omitted ')||text.includes(PRUNED_RESOLVED_ERROR)||structured(text)||diagnosticText(text))continue;
       // Stable across appends and history compaction: never include a row index.
       const id=`${name}:${safeString(callId)||'?'}:${fingerprint(text)}:${msgId}`;
+      const committed=planned.has(id);
+      if(isDiffCmd&&!((allowAgedDiffs&&mi<agedDiffCutoff)||committed))continue;
+      if(text.length<minResChars&&!(text.length>=100&&committed))continue;
       const wd=safeString(data(input,'workdir')),cw=safeString(data(input,'cwd'));
       const rBase=wd||cw||baseDir;
       out.push({id,mi,pi,name,input,accessor:a,length:text.length,
-        supKey:agedDiff?'':supersessionKey(name,input),
+        supKey:isDiffCmd?'':supersessionKey(name,input),
         readPath:name==='read'?normalizeTargetPath(pathOf(input),rBase):'',
         readScope:`${wd}\0${cw}`,
         range:name==='read'?readRange(input):undefined,
         original:text,
-        isAgedDiff:agedDiff});
+        isAgedDiff:isDiffCmd});
     }
   }
   if(opts.supersedeWrites!==false&&writeCalls.length){
@@ -1439,16 +1452,21 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
   const normalizedRatio=typeof pressure==='number' && Number.isFinite(pressure)?pressure:0;
   const force=normalizedRatio>=options.pressureForceRatio;
   const critical=normalizedRatio>=options.pressureCriticalRatio;
+  const latchedTier=typeof settings.adaptiveTier==='number'&&Number.isFinite(settings.adaptiveTier)?settings.adaptiveTier:0;
+  const adaptiveForce=force||latchedTier>=1;
+  const adaptiveCritical=critical||latchedTier>=2;
   const adaptive=options.adaptivePruning!==false;
-  const effMinResultChars=adaptive&&critical?Math.min(options.pruneMinResultChars,160):adaptive&&force?Math.min(options.pruneMinResultChars,250):options.pruneMinResultChars;
-  const effMinReasoningChars=adaptive&&(force||critical)?Math.min(options.pruneMinResultChars,160):options.pruneMinResultChars;
-  const effPreviewLines=adaptive&&critical?0:adaptive&&force?Math.min(options.prunePreviewLines,1):options.prunePreviewLines;
+  const effMinResultChars=adaptive&&adaptiveCritical?Math.min(options.pruneMinResultChars,160):adaptive&&adaptiveForce?Math.min(options.pruneMinResultChars,250):options.pruneMinResultChars;
+  const effMinReasoningChars=adaptive&&(adaptiveForce||adaptiveCritical)?Math.min(options.pruneMinResultChars,160):options.pruneMinResultChars;
+  const effPreviewLines=adaptive&&adaptiveCritical?0:adaptive&&adaptiveForce?Math.min(options.prunePreviewLines,1):options.prunePreviewLines;
   const agedDiffCutoff=Math.max(0,event.messages.length-Math.max(8,options.protectRecentMessages*2));
+  const plannedDrops=settings.plannedDrops instanceof Set?settings.plannedDrops:new Set<string>();
   const {entries,fileWrites,pairedReadOnly}=candidates(event,options,baseDir,{
     effMinResultChars,
     effMinReasoningChars,
-    allowAgedDiffs:options.pruneAgedDiffs!==false&&(force||critical),
+    allowAgedDiffs:options.pruneAgedDiffs!==false&&(adaptiveForce||adaptiveCritical),
     agedDiffCutoff,
+    plannedDrops,
   });
   const isNonResult=(x: any): boolean => !!(x.isErrorInput||x.isReasoning||x.isSupersededWriteInput||x.isOldToolInput||x.isResolvedError);
   const resultEntries=entries.filter(x=>!isNonResult(x));
@@ -1470,10 +1488,9 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
   }
   const protectedEntry=(e: any): boolean => {
     const pm=typeof e.protectMi==='number'?e.protectMi:e.mi;
-    return e.mi>=tail||e.mi>=tokenTail||pm>=tail||pm>=tokenTail||keep.has(e.id);
+    return e.mi>=tail||e.mi>=tokenTail||pm>=tail||pm>=tokenTail||(!plannedDrops.has(e.id)&&keep.has(e.id));
   };
   const total=resultEntries.reduce((sum,e)=>sum+e.length,0);
-  const plannedDrops=settings.plannedDrops instanceof Set?settings.plannedDrops:new Set();
   const newDrops=settings.allowNewDrops!==false;
   const forceFlush=settings.forceFlush===true;
   const dueToSize=total>options.pruneAfterToolChars*1.25;

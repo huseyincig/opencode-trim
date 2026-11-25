@@ -7,6 +7,7 @@ export interface CacheGate {
   coldCache: boolean;
   warmCache: boolean;
   forceFlush?: boolean;
+  adaptiveTier?: 0 | 1 | 2;
   plannedDrops: Set<string>;
   finish: (ids: Iterable<string>, opts?: { deferred?: boolean }) => void;
 }
@@ -15,6 +16,7 @@ export interface CacheSessionEntry {
   plannedDrops: Set<string>;
   sizeMark?: number;
   startBandAdmitted?: boolean;
+  adaptiveTier?: 0 | 1 | 2;
   lastRequestAt?: number;
   lastCacheRead?: number;
 }
@@ -143,6 +145,11 @@ export class ContextCache {
     const warmCache=kind==='context'&&!coldCache&&!changed&&observedRead!==undefined&&observedRead>0;
     const prevStartBand=entry?.startBandAdmitted;
     const prevSizeMark=entry?.sizeMark;
+    const curTier: 0 | 1 | 2 = kind==='context'&&typeof pressure?.ratio==='number'&&Number.isFinite(pressure.ratio)
+      ? (pressure.ratio>=opts.pressureCriticalRatio?2:pressure.ratio>=opts.pressureForceRatio?1:0)
+      : 0;
+    const prevTier: 0 | 1 | 2 = entry?.adaptiveTier??0;
+    const adaptiveTier: 0 | 1 | 2 = curTier>prevTier?curTier:prevTier;
     if(!entry){
       const hydrated=new Set<string>();
       if(kind==='context'&&typeof this.#persistence?.load==='function'){
@@ -153,7 +160,7 @@ export class ContextCache {
           }
         }catch{/* best-effort hydration */}
       }
-      entry={identity,plannedDrops:hydrated,startBandAdmitted:inStartBand,lastRequestAt:now,lastCacheRead:observedRead};
+      entry={identity,plannedDrops:hydrated,startBandAdmitted:inStartBand,adaptiveTier,lastRequestAt:now,lastCacheRead:observedRead};
     }else if(changed){
       // A model/tool/system change is a natural provider-cache rebuild: it may
       // admit new decisions, but previously committed drops must keep replaying.
@@ -162,10 +169,12 @@ export class ContextCache {
       entry.identity=identity;
       entry.sizeMark=undefined;
       entry.startBandAdmitted=inStartBand;
+      entry.adaptiveTier=adaptiveTier;
       entry.lastRequestAt=now;
       entry.lastCacheRead=observedRead;
     }else{
       entry.lastRequestAt=now;
+      entry.adaptiveTier=adaptiveTier;
       if(observedRead!==undefined)entry.lastCacheRead=observedRead;
       if(!inStartBand){
         entry.startBandAdmitted=false;
@@ -195,7 +204,7 @@ export class ContextCache {
       (entry.sizeMark===undefined||chars>=entry.sizeMark+budget*0.25))allowNewDrops=true;
     if(allowNewDrops&&chars>budget*1.25)entry.sizeMark=chars;
     const persistence=this.#persistence;
-    return {allowNewDrops,coldCache,warmCache,forceFlush,plannedDrops:entry.plannedDrops,
+    return {allowNewDrops,coldCache,warmCache,forceFlush,adaptiveTier,plannedDrops:entry.plannedDrops,
       finish(ids, finishOpts){
         if(finishOpts?.deferred===true){
           if(crossedStartBand)entry.startBandAdmitted=prevStartBand??false;
