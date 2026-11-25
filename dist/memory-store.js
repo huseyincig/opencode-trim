@@ -2,14 +2,203 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { SECTION_NAMES, normalizeSection, parseSections, sectionSnippet } from "./memory-sections.js";
-function compileSafeGrepRegex(pattern, caseSensitive) {
-    if (typeof pattern !== 'string' || !pattern || pattern.length > 200) {
-        throw new TypeError('invalid or unsafe grep regex');
+import { redactSecrets, stripRedactedAssignments } from "./redact.js";
+export { redactSecrets };
+function atomsDisjoint(a, b, caseSensitive) {
+    if (a === 'any' || b === 'any')
+        return false;
+    if (a === 'ws') {
+        if (b === 'digit' || b === 'word' || b === 'nonws')
+            return true;
+        if (b.startsWith('lit:'))
+            return !/\s/.test(b.slice(4));
+        return false;
     }
+    if (b === 'ws')
+        return atomsDisjoint(b, a, caseSensitive);
+    if (a === 'digit') {
+        if (b.startsWith('lit:'))
+            return !/[0-9]/.test(b.slice(4));
+        return false;
+    }
+    if (b === 'digit')
+        return atomsDisjoint(b, a, caseSensitive);
+    if (a === 'word') {
+        if (b.startsWith('lit:'))
+            return !/[A-Za-z0-9_]/.test(b.slice(4));
+        return false;
+    }
+    if (b === 'word')
+        return atomsDisjoint(b, a, caseSensitive);
+    if (a.startsWith('lit:') && b.startsWith('lit:')) {
+        const ca = a.slice(4);
+        const cb = b.slice(4);
+        return caseSensitive ? ca !== cb : ca.toLowerCase() !== cb.toLowerCase();
+    }
+    return false;
+}
+function isUnsafeGrepRegex(pattern, caseSensitive) {
     // Reject backreferences, lookarounds, nested quantifiers, and quantified alternation/nested groups (ReDoS risk).
     if (/\\[1-9]|\(\?[<!=]/.test(pattern) ||
         /(?:\([^()\\]*(?:\\[\s\S][^()\\]*)*[+*?}|][^()\\]*\))\s*(?:[+*?]|{\d)/.test(pattern) ||
         /\((?:[^()\\]|\\[\s\S])*\([^()]*\)(?:[^()\\]|\\[\s\S])*\)\s*(?:[+*?]|{\d)/.test(pattern)) {
+        return true;
+    }
+    // Tokenize atoms outside character classes to catch adjacent overlapping quantifiers
+    // (e.g. `a+a+a+a+$`, `[a-z]+[a-z]+`, `a+b?a+`, `.*.*`) and excessive chained wildcards (`.*x.*y.*z!$`).
+    let prevQuantClass = null;
+    let wildcardQuantifiers = 0;
+    let optionalQuantifiers = 0;
+    let depth = 0;
+    let i = 0;
+    while (i < pattern.length) {
+        const ch = pattern[i];
+        let atomClass = null;
+        let isWildcardAtom = false;
+        if (ch === '\\') {
+            if (i + 1 >= pattern.length)
+                return true;
+            const esc = pattern[i + 1];
+            i += 2;
+            if (esc === 's')
+                atomClass = 'ws';
+            else if (esc === 'S') {
+                atomClass = 'nonws';
+                isWildcardAtom = true;
+            }
+            else if (esc === 'd')
+                atomClass = 'digit';
+            else if (esc === 'w')
+                atomClass = 'word';
+            else if (esc === 'D' || esc === 'W') {
+                atomClass = 'any';
+                isWildcardAtom = true;
+            }
+            else if (esc === 'b' || esc === 'B') {
+                prevQuantClass = null;
+                continue;
+            }
+            else
+                atomClass = `lit:${esc}`;
+        }
+        else if (ch === '[') {
+            const start = i;
+            i++;
+            if (i < pattern.length && pattern[i] === '^')
+                i++;
+            if (i < pattern.length && pattern[i] === ']')
+                i++;
+            while (i < pattern.length && pattern[i] !== ']') {
+                if (pattern[i] === '\\')
+                    i += 2;
+                else
+                    i++;
+            }
+            if (i >= pattern.length)
+                return true;
+            const cls = pattern.slice(start, i + 1);
+            i++;
+            atomClass = 'any';
+            if (/^\[\^/.test(cls) || /\\s\\S|\\S\\s|\\d\\D|\\D\\d|\\w\\W|\\W\\w/.test(cls)) {
+                isWildcardAtom = true;
+            }
+        }
+        else if (ch === '(') {
+            depth++;
+            if (depth > 4)
+                return true;
+            i++;
+            if (pattern[i] === '?' && pattern[i + 1] === ':')
+                i += 2;
+            prevQuantClass = null;
+            continue;
+        }
+        else if (ch === ')') {
+            depth = Math.max(0, depth - 1);
+            i++;
+            atomClass = 'any';
+        }
+        else if (ch === '|' || ch === '^' || ch === '$') {
+            prevQuantClass = null;
+            i++;
+            continue;
+        }
+        else if (ch === '*' || ch === '+' || ch === '?' || ch === '{') {
+            return true;
+        }
+        else {
+            isWildcardAtom = ch === '.';
+            atomClass = ch === '.' ? 'any' : `lit:${ch}`;
+            i++;
+        }
+        if (!atomClass)
+            continue;
+        let quantified = false;
+        let optionalOnly = false;
+        let unboundedOrWide = false;
+        if (i < pattern.length) {
+            const q = pattern[i];
+            if (q === '+' || q === '*') {
+                quantified = true;
+                unboundedOrWide = true;
+                i++;
+                if (i < pattern.length && pattern[i] === '?')
+                    i++;
+            }
+            else if (q === '?') {
+                optionalOnly = true;
+                i++;
+                if (i < pattern.length && pattern[i] === '?')
+                    i++;
+            }
+            else if (q === '{') {
+                const m = /^\{(\d+)(?:,(\d*))?\}/.exec(pattern.slice(i));
+                if (m) {
+                    const min = Number(m[1]);
+                    const hasComma = m[0].includes(',');
+                    const max = m[2] === '' ? Infinity : m[2] !== undefined ? Number(m[2]) : min;
+                    if (!Number.isFinite(min) || min > 100 || (Number.isFinite(max) && max > 100) || (Number.isFinite(max) && max < min)) {
+                        return true;
+                    }
+                    if (hasComma && (max === Infinity || max > min)) {
+                        if (min === 0 && max === 1) {
+                            optionalOnly = true;
+                        }
+                        else {
+                            quantified = true;
+                            unboundedOrWide = max === Infinity || max - min >= 10;
+                        }
+                    }
+                    i += m[0].length;
+                    if (i < pattern.length && pattern[i] === '?')
+                        i++;
+                }
+            }
+        }
+        if (optionalOnly) {
+            optionalQuantifiers++;
+            if (optionalQuantifiers > 6)
+                return true;
+        }
+        if (quantified) {
+            if (prevQuantClass !== null && !atomsDisjoint(prevQuantClass, atomClass, caseSensitive)) {
+                return true;
+            }
+            if (isWildcardAtom && unboundedOrWide) {
+                wildcardQuantifiers++;
+                if (wildcardQuantifiers > 2)
+                    return true;
+            }
+            prevQuantClass = atomClass;
+        }
+        else if (!optionalOnly) {
+            prevQuantClass = null;
+        }
+    }
+    return false;
+}
+function compileSafeGrepRegex(pattern, caseSensitive) {
+    if (typeof pattern !== 'string' || !pattern || pattern.length > 200 || isUnsafeGrepRegex(pattern, caseSensitive)) {
         throw new TypeError('invalid or unsafe grep regex');
     }
     try {
@@ -21,164 +210,8 @@ function compileSafeGrepRegex(pattern, caseSensitive) {
 }
 const DAY_MS = 86400000;
 export const MAX_TEXT_CHARS = 1_000_000;
-const MAX_SCAN_CHARS = 200_000;
-const MAX_SCAN_DEPTH = 32;
-const MAX_KEY_MATCHES = 10_000;
 const MAX_QUERY_TOKENS = 16;
 const MAX_TOKEN_CHARS = 64;
-const REDACTED = '[REDACTED]';
-// Order matters: block/structured forms first, generic assignments last.
-const SECRET_PATTERNS = [
-    [/-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY|CERTIFICATE|PGP [A-Z ]*BLOCK)-----[\s\S]*?(?:-----END [A-Z0-9 ]*-----|$)/g, REDACTED],
-    [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, `Bearer ${REDACTED}`],
-    [/\b(?:Basic)\s+[A-Za-z0-9+/=]{12,}/g, `Basic ${REDACTED}`],
-    [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g, REDACTED],
-    [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g, REDACTED],
-    [/\bsk-ant-[A-Za-z0-9_-]{8,}/g, REDACTED],
-    [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, REDACTED],
-    [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, REDACTED],
-    [/\bglpat-[A-Za-z0-9_-]{16,}/g, REDACTED],
-    [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, REDACTED],
-    [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, REDACTED],
-    [/\bAIza[A-Za-z0-9_-]{30,}/g, REDACTED],
-    [/\bnpm_[A-Za-z0-9]{30,}/g, REDACTED],
-    // scheme://user:password@host
-    [/\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):[^\s@/]+@/gi, `$1:${REDACTED}@`],
-    // Bounded structured scanner for secret-keyed values (nested objects/arrays, escaped quotes).
-    [null, null],
-    // KEY=value / KEY: value / "key": "value" for secret-looking names
-    [
-        /(["']?\b[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|passw(?:or)?d|passwd|pwd|credential|private[_-]?key|auth|access[_-]?key)[A-Za-z0-9_.-]*["']?\s*[:=：]\s*)(?!\[REDACTED\])(?:"[^"\n]*"|'[^'\n]*'|[^\s,;&]+)/gi,
-        `$1${REDACTED}`,
-    ],
-    // PIN assignments and multilingual password/secret labels (CJK, Romance, Germanic)
-    [
-        /(\bPIN\b\s*[:=：]\s*)(?!\[REDACTED\])['"`]?\d{4,16}['"`]?/gi,
-        `$1${REDACTED}`,
-    ],
-    [
-        /((?:密碼|密码|パスワード|비밀번호|contraseña|mot\s+de\s+passe|passwort)\s*[:=：]\s*)(?!\[REDACTED\])(?:"[^"\n]*"|'[^'\n]*'|[^\s,;&]+)/gi,
-        `$1${REDACTED}`,
-    ],
-    // Generic exported env assignment of uppercase names with long values
-    [/\b(export\s+[A-Z][A-Z0-9_]{2,}=)(?:"[^"\n]*"|'[^'\n]*'|\S+)/g, `$1${REDACTED}`],
-];
-/**
- * Value starting at i: `end` is exclusive; `end === i` means no value. `closed:false` means the value
- * could not be delimited safely (unclosed, mismatched, too deep, or beyond the scan window): callers
- * must fail closed and redact through the end of the text. Never throws.
- */
-function valueEnd(s, i) {
-    const limit = Math.min(s.length, i + MAX_SCAN_CHARS);
-    const c = s[i];
-    if (c === undefined)
-        return { end: i, closed: true };
-    if (c === '{' || c === '[') {
-        const stack = [];
-        let quote = '';
-        for (let j = i; j < limit; j++) {
-            const ch = s[j];
-            if (quote) {
-                if (ch === '\\')
-                    j++;
-                else if (ch === quote)
-                    quote = '';
-            }
-            else if (ch === '"' || ch === "'")
-                quote = ch;
-            else if (ch === '{' || ch === '[') {
-                if (stack.length >= MAX_SCAN_DEPTH)
-                    return { end: s.length, closed: false };
-                stack.push(ch === '{' ? '}' : ']');
-            }
-            else if (ch === '}' || ch === ']') {
-                if (stack.pop() !== ch)
-                    return { end: s.length, closed: false };
-                if (!stack.length)
-                    return { end: j + 1, closed: true };
-            }
-        }
-        return { end: s.length, closed: false };
-    }
-    if (c === '"' || c === "'") {
-        for (let j = i + 1; j < limit; j++) {
-            if (s[j] === '\\')
-                j++;
-            else if (s[j] === c)
-                return { end: j + 1, closed: true };
-            else if (s[j] === '\n')
-                break;
-        }
-        return { end: s.length, closed: false };
-    }
-    let j = i;
-    while (j < limit && !/[\s,;&}\])]/.test(s[j]))
-        j++;
-    if (j >= limit && limit < s.length)
-        return { end: s.length, closed: false };
-    return { end: j, closed: true };
-}
-function redactStructured(text) {
-    try {
-        const re = /(["']?)\b[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|passw(?:or)?d|passwd|pwd|credential|private[_-]?key|auth|access[_-]?key)[A-Za-z0-9_.-]*\1\s*[:=：]\s*/gi;
-        let out = '';
-        let last = 0;
-        let n = 0;
-        let m;
-        while ((m = re.exec(text)) !== null) {
-            if (++n > MAX_KEY_MATCHES) {
-                // Too many keys to process safely: redact from this key to the end.
-                return out + text.slice(last, m.index) + REDACTED;
-            }
-            const start = m.index + m[0].length;
-            if (text.startsWith(REDACTED, start)) {
-                // An existing marker is a complete value only when properly delimited; otherwise fail closed.
-                const next = text[start + REDACTED.length];
-                if (next === undefined || /[\s,;&}\])]/.test(next))
-                    continue;
-                return out + text.slice(last, start) + REDACTED;
-            }
-            const { end, closed } = valueEnd(text, start);
-            if (!closed)
-                return out + text.slice(last, start) + REDACTED;
-            if (end <= start) {
-                if (m[0].length === 0)
-                    re.lastIndex++;
-                continue;
-            }
-            out += text.slice(last, start) + REDACTED;
-            last = end;
-            re.lastIndex = end;
-        }
-        return out + text.slice(last);
-    }
-    catch {
-        // Fail closed: never return text the scanner could not process.
-        return REDACTED;
-    }
-}
-/** Linear-time removal of `key: [REDACTED]` (key looked up backwards, bounded) for the emptiness check. */
-function stripRedactedAssignments(text) {
-    const re = /["']?\s*[:=]\s*\[REDACTED\]/g;
-    let out = '';
-    let last = 0;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-        let k = m.index;
-        const floor = Math.max(last, k - 256);
-        while (k > floor && /[\w.-]/.test(text[k - 1]))
-            k--;
-        out += text.slice(last, k);
-        last = m.index + m[0].length;
-    }
-    return out + text.slice(last);
-}
-export function redactSecrets(text) {
-    let out = String(text ?? '');
-    for (const [re, rep] of SECRET_PATTERNS)
-        out = re === null ? redactStructured(out) : out.replace(re, rep);
-    return out;
-}
 function clampInt(value, fallback, min, max) {
     const n = Number(value);
     if (!Number.isFinite(n))
@@ -480,18 +513,29 @@ function initSchema(db) {
         return;
     }
     if (!hasGlobalEventIdUnique(db)) {
-        const hadFts = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'history_fts'").get();
-        const auTrig = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'history_au'").get();
-        if (auTrig && typeof auTrig.sql === 'string' && !/AFTER\s+UPDATE\s+OF\s+text\b/i.test(auTrig.sql)) {
-            db.exec('DROP TRIGGER IF EXISTS history_au');
+        db.exec('BEGIN IMMEDIATE');
+        try {
+            const hadFts = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'history_fts'").get();
+            const auTrig = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'history_au'").get();
+            if (auTrig && typeof auTrig.sql === 'string' && !/AFTER\s+UPDATE\s+OF\s+text\b/i.test(auTrig.sql)) {
+                db.exec('DROP TRIGGER IF EXISTS history_au');
+            }
+            db.exec(DERIVED_SQL); // pre-existing composite table: just make sure derived objects exist
+            if (!hadFts) {
+                db.exec("INSERT INTO history_fts(history_fts) VALUES('rebuild')");
+            }
+            const v = Number(db.prepare('PRAGMA user_version').get()?.user_version);
+            if (v < SCHEMA_VERSION)
+                db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+            db.exec('COMMIT');
         }
-        db.exec(DERIVED_SQL); // pre-existing composite table: just make sure derived objects exist
-        if (!hadFts) {
-            db.exec("INSERT INTO history_fts(history_fts) VALUES('rebuild')");
+        catch (error) {
+            try {
+                db.exec('ROLLBACK');
+            }
+            catch { }
+            throw error;
         }
-        const v = Number(db.prepare('PRAGMA user_version').get()?.user_version);
-        if (v < SCHEMA_VERSION)
-            db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
         return;
     }
     db.exec('BEGIN IMMEDIATE');
@@ -552,10 +596,133 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
     const defaultSnippet = clampInt(maxSnippetChars, 400, 20, 4000);
     const vaultCap = clampInt(maxVaultRows, 500, 1, 5000);
     const db = new DatabaseSync(dbPath);
+    let insert, searchPageStmt, searchProjectSessionPageStmt, searchAllPageStmt, searchAllSessionPageStmt;
+    let recentProjectStmt, recentProjectSessionStmt, recentAllStmt, recentAllSessionStmt;
+    let updateAfterStmt, statsStmt, vaultStatsStmt, sessionCompactionsStmt, sessionLastReasonStmt;
+    let sessionVaultStatsStmt, pruneStmt, vaultDeleteExpiredRefStmt, vaultInsertStmt, vaultHasStmt;
+    let vaultGetStmt, vaultListStmt, vaultSearchCountStmt, vaultSearchPageStmt, vaultCountStmt, vaultEvictStmt, vaultPruneStmt;
     try {
         db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
         db.exec('PRAGMA journal_mode = DELETE; PRAGMA secure_delete = ON;');
         initSchema(db);
+        if (!memory)
+            secureFile(dbPath);
+        insert = db.prepare(`
+      INSERT OR IGNORE INTO history
+        (event_id, project, session_id, model, reason, created_at, text, tokens_json,
+         context_before_tokens, context_after_tokens)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        searchPageStmt = db.prepare(`
+      SELECT h.id, h.event_id, h.project, h.session_id, h.model, h.reason, h.created_at, h.text,
+             bm25(history_fts) AS rank
+      FROM history_fts
+      JOIN history h ON h.id = history_fts.rowid
+      WHERE history_fts MATCH ? AND h.project = ? AND h.created_at >= ?
+      ORDER BY rank, h.created_at DESC, h.id DESC
+      LIMIT ? OFFSET ?`);
+        searchProjectSessionPageStmt = db.prepare(`
+      SELECT h.id, h.event_id, h.project, h.session_id, h.model, h.reason, h.created_at, h.text,
+             bm25(history_fts) AS rank
+      FROM history_fts
+      JOIN history h ON h.id = history_fts.rowid
+      WHERE history_fts MATCH ? AND h.project = ? AND h.session_id = ? AND h.created_at >= ?
+      ORDER BY rank, h.created_at DESC, h.id DESC
+      LIMIT ? OFFSET ?`);
+        searchAllPageStmt = db.prepare(`
+      SELECT h.id, h.event_id, h.project, h.session_id, h.model, h.reason, h.created_at, h.text,
+             bm25(history_fts) AS rank
+      FROM history_fts
+      JOIN history h ON h.id = history_fts.rowid
+      WHERE history_fts MATCH ? AND h.created_at >= ?
+      ORDER BY rank, h.created_at DESC, h.id DESC
+      LIMIT ? OFFSET ?`);
+        searchAllSessionPageStmt = db.prepare(`
+      SELECT h.id, h.event_id, h.project, h.session_id, h.model, h.reason, h.created_at, h.text,
+             bm25(history_fts) AS rank
+      FROM history_fts
+      JOIN history h ON h.id = history_fts.rowid
+      WHERE history_fts MATCH ? AND h.session_id = ? AND h.created_at >= ?
+      ORDER BY rank, h.created_at DESC, h.id DESC
+      LIMIT ? OFFSET ?`);
+        recentProjectStmt = db.prepare(`
+      SELECT id, event_id, project, session_id, model, reason, created_at, text
+      FROM history
+      WHERE project = ? AND created_at >= ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?`);
+        recentProjectSessionStmt = db.prepare(`
+      SELECT id, event_id, project, session_id, model, reason, created_at, text
+      FROM history
+      WHERE project = ? AND session_id = ? AND created_at >= ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?`);
+        recentAllStmt = db.prepare(`
+      SELECT id, event_id, project, session_id, model, reason, created_at, text
+      FROM history
+      WHERE created_at >= ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?`);
+        recentAllSessionStmt = db.prepare(`
+      SELECT id, event_id, project, session_id, model, reason, created_at, text
+      FROM history
+      WHERE session_id = ? AND created_at >= ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?`);
+        updateAfterStmt = db.prepare('UPDATE history SET context_after_tokens = ? WHERE project = ? AND event_id = ?');
+        statsStmt = db.prepare('SELECT count(*) AS c, max(created_at) AS m FROM history WHERE project = ? AND created_at >= ?');
+        vaultStatsStmt = db.prepare('SELECT count(*) AS c, coalesce(sum(length(text)), 0) AS chars FROM vault WHERE project = ? AND created_at >= ?');
+        sessionCompactionsStmt = db.prepare(`
+      SELECT count(*) AS c,
+             sum(CASE WHEN reason = 'auto' THEN 1 ELSE 0 END) AS auto_c,
+             sum(CASE WHEN reason = 'manual' THEN 1 ELSE 0 END) AS manual_c,
+             min(created_at) AS first_at,
+             max(created_at) AS last_at
+      FROM history
+      WHERE project = ? AND session_id = ? AND created_at >= ?
+        AND (reason IS NULL OR reason IN ('auto', 'manual'))`);
+        sessionLastReasonStmt = db.prepare(`
+      SELECT reason FROM history
+      WHERE project = ? AND session_id = ? AND created_at >= ?
+        AND (reason IS NULL OR reason IN ('auto', 'manual'))
+      ORDER BY created_at DESC, id DESC LIMIT 1`);
+        sessionVaultStatsStmt = db.prepare('SELECT count(*) AS c, coalesce(sum(length(text)), 0) AS chars, min(created_at) AS first_at FROM vault WHERE project = ? AND session_id = ? AND created_at >= ?');
+        // Retention is per project: a shared DB must never lose another project's rows.
+        pruneStmt = db.prepare('DELETE FROM history WHERE created_at < ? AND project = ?');
+        vaultDeleteExpiredRefStmt = db.prepare('DELETE FROM vault WHERE project = ? AND ref_id = ? AND created_at < ?');
+        vaultInsertStmt = db.prepare(`
+      INSERT OR IGNORE INTO vault
+        (project, session_id, ref_id, tool, target, tokens, line_count, created_at, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        vaultHasStmt = db.prepare('SELECT 1 FROM vault WHERE project = ? AND ref_id = ? AND created_at >= ?');
+        vaultListStmt = db.prepare(`
+      SELECT ref_id, session_id, tool, target, tokens, line_count, created_at
+      FROM vault
+      WHERE project = ? AND created_at >= ?
+        AND (? IS NULL OR lower(coalesce(tool, '')) = ?)
+        AND (? IS NULL OR instr(lower(coalesce(target, '')), ?) > 0)
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?`);
+        vaultGetStmt = db.prepare('SELECT ref_id, session_id, tool, target, tokens, line_count, created_at, text FROM vault WHERE project = ? AND ref_id = ? AND created_at >= ?');
+        vaultSearchCountStmt = db.prepare('SELECT count(*) AS c FROM vault WHERE project = ? AND created_at >= ?');
+        vaultSearchPageStmt = db.prepare(`
+      SELECT ref_id, session_id, tool, target, tokens, line_count, created_at, text
+      FROM vault
+      WHERE project = ? AND created_at >= ?
+        AND (? IS NULL OR lower(coalesce(tool, '')) = ?)
+        AND (? IS NULL OR instr(lower(coalesce(target, '')), ?) > 0)
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?`);
+        vaultCountStmt = db.prepare('SELECT count(*) AS c FROM vault WHERE project = ?');
+        vaultEvictStmt = db.prepare(`
+      DELETE FROM vault WHERE id IN (
+        SELECT id FROM vault WHERE project = ? ORDER BY created_at ASC, id ASC LIMIT ?
+      )`);
+        vaultPruneStmt = db.prepare('DELETE FROM vault WHERE created_at < ? AND project = ?');
+        if (typeof project === 'string' && project) {
+            const cutoff = Date.now() - retentionMs;
+            pruneStmt.run(cutoff, project); // drop expired rows on open
+            vaultPruneStmt.run(cutoff, project);
+        }
     }
     catch (error) {
         try {
@@ -563,116 +730,6 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
         }
         catch { }
         throw error;
-    }
-    if (!memory)
-        secureFile(dbPath);
-    const insert = db.prepare(`
-    INSERT OR IGNORE INTO history
-      (event_id, project, session_id, model, reason, created_at, text, tokens_json,
-       context_before_tokens, context_after_tokens)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    const searchPageStmt = db.prepare(`
-    SELECT h.id, h.event_id, h.project, h.session_id, h.model, h.reason, h.created_at, h.text,
-           bm25(history_fts) AS rank
-    FROM history_fts
-    JOIN history h ON h.id = history_fts.rowid
-    WHERE history_fts MATCH ? AND h.project = ? AND h.created_at >= ?
-    ORDER BY rank, h.created_at DESC, h.id DESC
-    LIMIT ? OFFSET ?`);
-    const searchProjectSessionPageStmt = db.prepare(`
-    SELECT h.id, h.event_id, h.project, h.session_id, h.model, h.reason, h.created_at, h.text,
-           bm25(history_fts) AS rank
-    FROM history_fts
-    JOIN history h ON h.id = history_fts.rowid
-    WHERE history_fts MATCH ? AND h.project = ? AND h.session_id = ? AND h.created_at >= ?
-    ORDER BY rank, h.created_at DESC, h.id DESC
-    LIMIT ? OFFSET ?`);
-    const searchAllPageStmt = db.prepare(`
-    SELECT h.id, h.event_id, h.project, h.session_id, h.model, h.reason, h.created_at, h.text,
-           bm25(history_fts) AS rank
-    FROM history_fts
-    JOIN history h ON h.id = history_fts.rowid
-    WHERE history_fts MATCH ? AND h.created_at >= ?
-    ORDER BY rank, h.created_at DESC, h.id DESC
-    LIMIT ? OFFSET ?`);
-    const searchAllSessionPageStmt = db.prepare(`
-    SELECT h.id, h.event_id, h.project, h.session_id, h.model, h.reason, h.created_at, h.text,
-           bm25(history_fts) AS rank
-    FROM history_fts
-    JOIN history h ON h.id = history_fts.rowid
-    WHERE history_fts MATCH ? AND h.session_id = ? AND h.created_at >= ?
-    ORDER BY rank, h.created_at DESC, h.id DESC
-    LIMIT ? OFFSET ?`);
-    const recentProjectStmt = db.prepare(`
-    SELECT id, event_id, project, session_id, model, reason, created_at, text
-    FROM history
-    WHERE project = ? AND created_at >= ?
-    ORDER BY created_at DESC, id DESC
-    LIMIT ?`);
-    const recentProjectSessionStmt = db.prepare(`
-    SELECT id, event_id, project, session_id, model, reason, created_at, text
-    FROM history
-    WHERE project = ? AND session_id = ? AND created_at >= ?
-    ORDER BY created_at DESC, id DESC
-    LIMIT ?`);
-    const recentAllStmt = db.prepare(`
-    SELECT id, event_id, project, session_id, model, reason, created_at, text
-    FROM history
-    WHERE created_at >= ?
-    ORDER BY created_at DESC, id DESC
-    LIMIT ?`);
-    const recentAllSessionStmt = db.prepare(`
-    SELECT id, event_id, project, session_id, model, reason, created_at, text
-    FROM history
-    WHERE session_id = ? AND created_at >= ?
-    ORDER BY created_at DESC, id DESC
-    LIMIT ?`);
-    const updateAfterStmt = db.prepare('UPDATE history SET context_after_tokens = ? WHERE project = ? AND event_id = ?');
-    const statsStmt = db.prepare('SELECT count(*) AS c, max(created_at) AS m FROM history WHERE project = ? AND created_at >= ?');
-    const vaultStatsStmt = db.prepare('SELECT count(*) AS c, coalesce(sum(length(text)), 0) AS chars FROM vault WHERE project = ? AND created_at >= ?');
-    const sessionCompactionsStmt = db.prepare(`
-    SELECT count(*) AS c,
-           sum(CASE WHEN reason = 'auto' THEN 1 ELSE 0 END) AS auto_c,
-           sum(CASE WHEN reason = 'manual' THEN 1 ELSE 0 END) AS manual_c,
-           min(created_at) AS first_at,
-           max(created_at) AS last_at
-    FROM history
-    WHERE project = ? AND session_id = ? AND created_at >= ?
-      AND (reason IS NULL OR reason IN ('auto', 'manual'))`);
-    const sessionLastReasonStmt = db.prepare(`
-    SELECT reason FROM history
-    WHERE project = ? AND session_id = ? AND created_at >= ?
-      AND (reason IS NULL OR reason IN ('auto', 'manual'))
-    ORDER BY created_at DESC, id DESC LIMIT 1`);
-    const sessionVaultStatsStmt = db.prepare('SELECT count(*) AS c, coalesce(sum(length(text)), 0) AS chars, min(created_at) AS first_at FROM vault WHERE project = ? AND session_id = ? AND created_at >= ?');
-    // Retention is per project: a shared DB must never lose another project's rows.
-    const pruneStmt = db.prepare('DELETE FROM history WHERE created_at < ? AND project = ?');
-    const vaultInsertStmt = db.prepare(`
-    INSERT OR IGNORE INTO vault
-      (project, session_id, ref_id, tool, target, tokens, line_count, created_at, text)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    const vaultHasStmt = db.prepare('SELECT 1 FROM vault WHERE project = ? AND ref_id = ? AND created_at >= ?');
-    const vaultGetStmt = db.prepare('SELECT ref_id, session_id, tool, target, tokens, line_count, created_at, text FROM vault WHERE project = ? AND ref_id = ? AND created_at >= ?');
-    const vaultListStmt = db.prepare('SELECT ref_id, session_id, tool, target, tokens, line_count, created_at FROM vault WHERE project = ? AND created_at >= ? ORDER BY created_at DESC, id DESC LIMIT 500');
-    const vaultSearchCountStmt = db.prepare('SELECT count(*) AS c FROM vault WHERE project = ? AND created_at >= ?');
-    const vaultSearchPageStmt = db.prepare(`
-    SELECT ref_id, session_id, tool, target, tokens, line_count, created_at, text
-    FROM vault
-    WHERE project = ? AND created_at >= ?
-      AND (? IS NULL OR lower(coalesce(tool, '')) = ?)
-      AND (? IS NULL OR instr(lower(coalesce(target, '')), ?) > 0)
-    ORDER BY created_at DESC, id DESC
-    LIMIT ? OFFSET ?`);
-    const vaultCountStmt = db.prepare('SELECT count(*) AS c FROM vault WHERE project = ?');
-    const vaultEvictStmt = db.prepare(`
-    DELETE FROM vault WHERE id IN (
-      SELECT id FROM vault WHERE project = ? ORDER BY created_at ASC, id ASC LIMIT ?
-    )`);
-    const vaultPruneStmt = db.prepare('DELETE FROM vault WHERE created_at < ? AND project = ?');
-    if (typeof project === 'string' && project) {
-        const cutoff = Date.now() - retentionMs;
-        pruneStmt.run(cutoff, project); // drop expired rows on open
-        vaultPruneStmt.run(cutoff, project);
     }
     let closed = false;
     return {
@@ -1025,18 +1082,22 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
             if (typeof r.text !== 'string' || !r.text)
                 throw new TypeError('text is required');
             const sliced = r.text.length > MAX_TEXT_CHARS ? r.text.slice(0, MAX_TEXT_CHARS) : r.text;
-            const redacted = redactSecrets(sliced);
+            const rawRedacted = redactSecrets(sliced);
+            const redacted = rawRedacted.length > MAX_TEXT_CHARS ? rawRedacted.slice(0, MAX_TEXT_CHARS) : rawRedacted;
             const lineCount = redacted.split('\n').length;
             const created = optInt(r.created_at) ?? Date.now();
             const tok = optInt(r.tokens) ?? Math.max(1, Math.ceil(redacted.length / 3));
-            vaultInsertStmt.run(r.project, str(r.session_id, 256), r.ref_id.slice(0, 128), str(r.tool, 64), str(r.target, 512), tok, lineCount, created, redacted);
+            const refId = r.ref_id.slice(0, 128);
+            // Clear any expired physical row for this same ref_id so INSERT OR IGNORE can refresh it without overwriting active rows.
+            vaultDeleteExpiredRefStmt.run(r.project, refId, Date.now() - retentionMs);
+            vaultInsertStmt.run(r.project, str(r.session_id, 256), refId, str(r.tool, 64), str(r.target, 512), tok, lineCount, created, redacted);
             const total = Number(vaultCountStmt.get(r.project)?.c ?? 0);
             if (total > vaultCap) {
                 vaultEvictStmt.run(r.project, total - vaultCap);
             }
             if (!memory)
                 secureFile(dbPath);
-            return { saved: true, ref_id: r.ref_id.slice(0, 128), line_count: lineCount };
+            return { saved: true, ref_id: refId, line_count: lineCount, truncated: r.text.length > MAX_TEXT_CHARS || rawRedacted.length > MAX_TEXT_CHARS };
         },
         hasVault(vaultProject, refId, now = Date.now()) {
             if (closed)
@@ -1063,27 +1124,19 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
             const targetFilter = typeof target === 'string' && target.trim() ? target.trim().toLowerCase() : null;
             const lim = clampInt(limit, 20, 1, 50);
             const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
-            const allRows = vaultListStmt.all(vaultProject, t - retentionMs);
-            const totalVaultRows = allRows.length;
-            const matched = [];
-            for (const r of allRows) {
-                if (toolFilter && String(r.tool ?? '').toLowerCase() !== toolFilter)
-                    continue;
-                if (targetFilter && !String(r.target ?? '').toLowerCase().includes(targetFilter))
-                    continue;
-                matched.push({
-                    id: r.ref_id,
-                    session_id: r.session_id ?? null,
-                    tool: r.tool ?? null,
-                    target: r.target ?? null,
-                    tokens: Number(r.tokens ?? 0),
-                    totalLines: Number(r.line_count ?? 0),
-                    created_at: Number(r.created_at ?? 0),
-                    date: new Date(Number(r.created_at ?? 0)).toISOString(),
-                });
-                if (matched.length >= lim)
-                    break;
-            }
+            const cutoff = t - retentionMs;
+            const totalVaultRows = Number(vaultSearchCountStmt.get(vaultProject, cutoff)?.c ?? 0);
+            const rows = vaultListStmt.all(vaultProject, cutoff, toolFilter, toolFilter, targetFilter, targetFilter, lim);
+            const matched = rows.map((r) => ({
+                id: r.ref_id,
+                session_id: r.session_id ?? null,
+                tool: r.tool ?? null,
+                target: r.target ?? null,
+                tokens: Number(r.tokens ?? 0),
+                totalLines: Number(r.line_count ?? 0),
+                created_at: Number(r.created_at ?? 0),
+                date: new Date(Number(r.created_at ?? 0)).toISOString(),
+            }));
             if (!matched.length) {
                 return {
                     found: false,

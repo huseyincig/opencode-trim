@@ -1,3 +1,5 @@
+import { redactSecrets } from './redact.ts';
+export { redactSecrets };
 export interface VaultLookupResult {
     found: boolean;
     id: string;
@@ -41,7 +43,6 @@ export interface VaultListResult extends VaultLookupResult {
     refs: VaultRefSummary[];
 }
 export declare const MAX_TEXT_CHARS = 1000000;
-export declare function redactSecrets(text: unknown): string;
 /** Split a user query into quoted FTS5 phrase tokens; never passes raw operators. */
 export declare function buildMatchQuery(query: unknown): string;
 export declare const SCAN_BATCH = 100;
@@ -111,6 +112,7 @@ export declare function openMemoryStore({ dbPath, retentionDays, maxResults, max
         saved: boolean;
         ref_id: any;
         line_count: number;
+        truncated: boolean;
     };
     hasVault(vaultProject: unknown, refId: unknown, now?: number): boolean;
     listVault({ project: vaultProject, tool, target, limit, now }?: {

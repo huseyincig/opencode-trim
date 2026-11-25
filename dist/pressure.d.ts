@@ -36,6 +36,7 @@ export interface PressureEstimate {
     reportedTokens?: number;
     /** Token count the ratio is based on: real provider tokens when available, else the byte estimate. */
     effectiveTokens: number;
+    overheadTokens?: number;
     breakdown?: ContextBreakdown;
     diagnostics?: ContextDiagnostics;
 }
@@ -45,10 +46,11 @@ export declare function resolveModelLimit(event: any, modelLimits?: Map<string, 
 /** Bytes are treated conservatively for mostly UTF-8 text, without expensive tokenizer dependencies. */
 export declare function estimateTokens(text: unknown): number;
 /** Only estimates model-visible text; media tokens are not predictable from these hooks. */
-/** Real provider token counts keyed by assistant message id (e.g. from session.step.ended), plus drops already reflected in them. */
+/** Real provider token counts keyed by assistant message id (e.g. from session.step.ended), plus drops and overhead baseline already reflected in them. */
 export interface NativeTokenInfo {
     tokens: Map<string, number>;
     baselineChars?: number;
+    baselineOverheadTokens?: number;
 }
 export declare function sumPrunedMsgChars(messages: unknown): number;
 export declare function estimateRequest(event: any, modelLimits: Map<string, ModelLimitEntry>, options: any, native?: NativeTokenInfo): PressureEstimate;

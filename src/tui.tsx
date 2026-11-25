@@ -25,7 +25,26 @@ import {
 const DEBOUNCE_MS = 150
 const POLL_MS = 2000
 const IDLE_TICK_MS = 30_000
+const RPC_TIMEOUT_MS = 10_000
 const MAX_HIDDEN_RETRIES = 3
+
+function withTimeout<T>(promise: Promise<T>, ms: number = RPC_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("opencode-trim TUI request timed out")), ms)
+    ;(timer as { unref?: () => void }).unref?.()
+    promise.then(
+      (value) => {
+        if (timer) clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        if (timer) clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
+}
 const COLLAPSED_BAR_WIDTH = 14
 const EXPANDED_BAR_WIDTH = 34
 const REFRESH_EVENTS = [
@@ -276,7 +295,9 @@ export default Plugin.define({
                 // Probe RPC first: when server tui.enabled is false, avoid unnecessary message/model sync calls.
                 let next: any
                 try {
-                  next = await rpc.snapshot({ sessionID }, context.location ? { location: context.location } : undefined)
+                  next = await withTimeout(
+                    Promise.resolve(rpc.snapshot({ sessionID }, context.location ? { location: context.location } : undefined)),
+                  )
                   if (disposed || mine !== seq) return
                   if (next && typeof next.sessionID === "string" && next.sessionID !== sessionID) {
                     next = null
@@ -313,7 +334,7 @@ export default Plugin.define({
                 try {
                   const messages = context.data?.session?.message
                   if (messages && typeof messages.list === "function") {
-                    let list = await Promise.resolve(messages.list(sessionID))
+                    let list = await withTimeout(Promise.resolve(messages.list(sessionID)))
                     let msgKey = messageListKey(list)
                     const unchanged = msgKey === lastMsgKey && (hasServerBreakdown || !lastHadServerBreakdown)
                     if (!unchanged) {
@@ -321,8 +342,8 @@ export default Plugin.define({
                       if (tokens === null && !messagesSynced && typeof messages.sync === "function") {
                         // The TUI message cache is empty until synced; sync at most once per session mount.
                         messagesSynced = true
-                        try { await Promise.resolve(messages.sync(sessionID)) } catch {}
-                        list = await Promise.resolve(messages.list(sessionID))
+                        try { await withTimeout(Promise.resolve(messages.sync(sessionID))) } catch {}
+                        list = await withTimeout(Promise.resolve(messages.list(sessionID)))
                         msgKey = messageListKey(list)
                         tokens = nativeContextTokens(list)
                       }
@@ -363,7 +384,7 @@ export default Plugin.define({
                 }
 
                 try {
-                  const meta = await resolveSessionMeta(sessionID)
+                  const meta = await withTimeout(resolveSessionMeta(sessionID))
                   if (!disposed && mine === seq) {
                     setNativeLimit(meta.limit)
                     setSessionCreatedAt(meta.createdAt)

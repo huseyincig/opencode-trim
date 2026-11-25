@@ -11,6 +11,7 @@ import { splitSegments, shellWords, skipPrefixWords } from './families/util.ts';
 import { MAX_LINE, STACK as DIAG_STACK, SUMMARY as DIAG_SUMMARY, ANCHOR as DIAG_ANCHOR, CODE as DIAG_CODE, hasFailureText, parseExitCode } from './diagnostics.ts';
 import { isMeshProtectedPart, verifyMeshMetadata, MESH_SYMBOL, MESH_METADATA_KEY } from './bridge.ts';
 import { recordPrunedMsgChars } from './pressure.ts';
+import { redactSecrets } from './redact.ts';
 
 export interface CacheBreakEvenInput {
   savedChars: number;
@@ -91,8 +92,8 @@ export function buildPreviewNotice(original: string, notice: string, previewLine
   if (!n || typeof original !== 'string' || typeof notice !== 'string' || !original) return notice;
   const lines = original.split('\n');
   if (lines.length <= n * 2 + 2) return notice;
-  const head = lines.slice(0, n).map((l) => l.slice(0, 200)).join('\n');
-  const tail = lines.slice(-n).map((l) => l.slice(0, 200)).join('\n');
+  const head = redactSecrets(lines.slice(0, n).map((l) => l.slice(0, 200)).join('\n'));
+  const tail = redactSecrets(lines.slice(-n).map((l) => l.slice(0, 200)).join('\n'));
   const combined = `${head}\n${notice}\n${tail}`;
   return combined.length <= Math.floor(original.length * 0.65) ? combined : notice;
 }
@@ -663,28 +664,34 @@ function readRange(input: any): { start: number; end: number } | null {
 const KEY_SKIP=new Set(['description','timeout','id','workdir','cwd']);
 const READ_SKIP=new Set([...KEY_SKIP,'offset','limit','startLine','start_line','lineCount','count','endLine','end_line']);
 const KEY_MAX=512;
-/** Small own-data walk with hard budgets; false when the value is not small and plain. */
+/** Small own-data walk with hard budgets; false when the value is not small, plain, and proxy-free. */
 function smallJson(v: unknown, budget: { n: number }): boolean {
   let nodes=0;
   const walk=(x: any, d: number): boolean => {
     if(--budget.n<0||++nodes>64||d>4)return false;
     if(typeof x==='string'){budget.n-=x.length;return budget.n>=0;}
     if(x===null||typeof x==='number'||typeof x==='boolean')return true;
-    if(typeof x!=='object')return false;
+    if(typeof x!=='object'||types.isProxy(x))return false;
+    const proto=Object.getPrototypeOf(x);
     if(Array.isArray(x)){
-      if(x.length>32)return false;
-      for(let i=0;i<x.length;i++)if(!walk(x[i],d+1))return false;
-      return true;
+      if(proto!==Array.prototype||x.length>32)return false;
+      for(let i=0;i<x.length;i++){
+        const dsc=Object.getOwnPropertyDescriptor(x,String(i));
+        if(!dsc||!('value' in dsc)||!walk(dsc.value,d+1))return false;
+      }
+      return !Object.prototype.hasOwnProperty.call(x,'toJSON');
     }
+    if(proto!==Object.prototype&&proto!==null)return false;
     let seen=0;
     for(const k in x){
       if(!Object.prototype.hasOwnProperty.call(x,k))continue;
+      if(k==='toJSON')return false;
       if(++seen>32)return false;
       const dsc=Object.getOwnPropertyDescriptor(x,k);
       if(!dsc||!('value' in dsc)||!walk(dsc.value,d+1))return false;
       budget.n-=k.length;
     }
-    return budget.n>=0&&typeof x.toJSON!=='function';
+    return budget.n>=0;
   };
   return walk(v,0);
 }
@@ -771,17 +778,18 @@ export function isTrimMeshProtected(part: any, msg: any, sessionID?: string): bo
       if(!isMeshProtectedPart({metadata:m}))continue;
       const env=obj(data(m,MESH_METADATA_KEY))?data(m,MESH_METADATA_KEY):undefined;
       const tok=typeof data(env,'token')==='string'?data(env,'token'):(typeof data(m,'opencode-guardian-provenance')==='string'?data(m,'opencode-guardian-provenance'):'');
-      if(hasLedger&&tok&&!verifyMeshMetadata(sid,{metadata:m}))continue;
+      if(hasLedger&&(tok||env)&&!verifyMeshMetadata(sid,{metadata:m}))continue;
       return true;
     }
   }
   return false;
 }
 const ERROR_INPUT_SKIP=new Set(['path','filePath','file_path','directory','id','tool','name','workdir','cwd']);
-function collectErrorInputCandidates(call: any, callId: unknown, name: string, opts: any, out: any[]): void {
+function collectErrorInputCandidates(call: any, resultMi: number, callId: unknown, name: string, opts: any, out: any[]): void {
   if(opts.purgeErrorInputs===false||!call||PROTECTED_NAME.test(name))return;
   const inp=call.input;
   if(!obj(inp)||trapped(inp))return;
+  const protectMi=Math.max(call.mi,resultMi);
   for(const k of Object.keys(inp)){
     if(ERROR_INPUT_SKIP.has(k))continue;
     if(!writable(inp,k))continue;
@@ -789,11 +797,22 @@ function collectErrorInputCandidates(call: any, callId: unknown, name: string, o
     if(typeof val!=='string'||val===PRUNED_ERROR_INPUT||val.length<opts.pruneMinResultChars)continue;
     const id=`errinput:${safeString(callId)||'?'}:${k}:${fingerprint(val)}:${call.msgId}`;
     out.push({
-      id,mi:call.mi,pi:call.pi,name,input:inp,
+      id,mi:call.mi,protectMi,pi:call.pi,name,input:inp,
       accessor:{get:()=>data(inp,k),set:(v: string)=>{inp[k]=v;}},
       length:val.length,supKey:'',range:undefined,original:val,isErrorInput:true,
     });
   }
+}
+function touchesInstructionTarget(input: any): boolean {
+  if(!obj(input)||trapped(input))return false;
+  if(INSTRUCTION_PATH.test(pathOf(input)))return true;
+  for(const k of ['include','glob','file','target','filename']){
+    const v=data(input,k);
+    if(typeof v==='string'&&v&&v.split(/[\s,]+/).some(t=>t&&INSTRUCTION_PATH.test(t)))return true;
+  }
+  const pat=data(input,'pattern');
+  if(typeof pat==='string'&&pat&&INSTRUCTION_PATH.test(pat.trim()))return true;
+  return false;
 }
 /** Pair by call id in source order, never join an unrelated earlier assistant call. */
 function candidates(event: any, opts: any, baseDir?: string): { entries: any[]; fileWrites: Array<{ mi: number; pi: number; path: string; scope: string }> } {
@@ -806,10 +825,10 @@ function candidates(event: any, opts: any, baseDir?: string): { entries: any[]; 
     const content=data(msg,'content');
     if(!isArr(content))continue;
     // Hard content-part budget: an over-budget message is never touched, and an
-    // over-budget request stops collecting (fail closed).
+    // over-budget request stops collecting and fails closed (no partial pruning).
     if(content.length>MAX_PARTS_PER_MESSAGE)continue;
     totalParts+=content.length;
-    if(totalParts>MAX_PARTS_TOTAL)break;
+    if(totalParts>MAX_PARTS_TOTAL)return {entries:[],fileWrites:[]};
     const msgId=stableMessageKey(msg);
     const role=data(msg,'role')??data(msg,'type');
     if(role==='assistant'&&opts.pruneHistoricalReasoning!==false&&!hasReasoningSignature(msg)&&!isTrimMeshProtected(msg,msg,event?.sessionID)){
@@ -853,12 +872,12 @@ function candidates(event: any, opts: any, baseDir?: string): { entries: any[]; 
       // A split native tool-result without its own matching invocation is not
       // safe to transform: another tool may have reused the call ID.
       if(type==='tool-result' && !call)continue;
-      if(isTrimMeshProtected(part,msg,event?.sessionID))continue;
+      if(isTrimMeshProtected(part,msg,event?.sessionID)||(call&&isTrimMeshProtected(call.part,call.msg,event?.sessionID)))continue;
       const name=(safeString(data(part,'name')??data(part,'tool')??call?.name)).toLowerCase();
       if(role!=='user'&&failure(part)){
         const errCall=call??(type==='tool'?{name,input:getInput(part),mi,pi,msgId,part,msg}:null);
         if(errCall&&!isTrimMeshProtected(errCall.part,errCall.msg,event?.sessionID)){
-          collectErrorInputCandidates(errCall,callId,name,opts,out);
+          collectErrorInputCandidates(errCall,mi,callId,name,opts,out);
         }
         continue;
       }
@@ -879,7 +898,7 @@ function candidates(event: any, opts: any, baseDir?: string): { entries: any[]; 
       if(type==='tool'&&data(data(part,'state'),'status')!=='completed')continue;
       const input=call?.input??getInput(part);
       if(trapped(input))continue;
-      if(name === 'read' && INSTRUCTION_PATH.test(pathOf(input)))continue;
+      if(isLiveDiskTool(name)&&touchesInstructionTarget(input))continue;
       if(!readOnlyCommand(name,input))continue;
       const a=accessor(part);if(!a)continue;
       const text=a.get();
@@ -921,7 +940,10 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
     accumulated+=messageTokens(at(event.messages,i));tokenTail=i;
     if(accumulated>=protectedTokens)break;
   }
-  const protectedEntry=(e: any): boolean => e.mi>=tail||e.mi>=tokenTail||keep.has(e.id);
+  const protectedEntry=(e: any): boolean => {
+    const pm=typeof e.protectMi==='number'?e.protectMi:e.mi;
+    return e.mi>=tail||e.mi>=tokenTail||pm>=tail||pm>=tokenTail||keep.has(e.id);
+  };
   const total=resultEntries.reduce((sum,e)=>sum+e.length,0);
   const plannedDrops=settings.plannedDrops instanceof Set?settings.plannedDrops:new Set();
   const newDrops=settings.allowNewDrops!==false;
@@ -1043,6 +1065,22 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
       }
     }
   }
+  // Two-phase vault persistence: store all new ephemeral refs FIRST, then verify
+  // vault.has(refId) during commit so same-batch vault eviction can never leave
+  // an already-committed recoverableNotice pointing to an evicted ref.
+  const refIds=new Map<any, string>();
+  if(vault){
+    for(const e of operations){
+      if(e.isErrorInput||e.isReasoning||isLiveDiskTool(e.name))continue;
+      if(e.accessor.get()!==e.original)continue;
+      const refId=`trm_${createHash('sha256').update(`${event?.sessionID??''}\0${e.id}\0${e.original}`).digest('hex').slice(0,32)}`;
+      refIds.set(e,refId);
+      const already=plannedDrops.has(e.id);
+      if((!already||!vault.has(refId))&&newDrops){
+        try{vault.store(refId,e,event?.sessionID);}catch{/* best-effort vault store */}
+      }
+    }
+  }
   let removedChars=0;const committed=[];
   try {
     for(const e of operations) {
@@ -1056,13 +1094,8 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
           const target=typeof rawTarget==='string'?rawTarget.trim():'';
           replacement=liveDiskNotice(e.name,target||undefined,estTok,lines);
         }else{
-          const refId=`trm_${createHash('sha256').update(`${event?.sessionID??''}\0${e.id}\0${e.original}`).digest('hex').slice(0,32)}`;
+          const refId=refIds.get(e)??`trm_${createHash('sha256').update(`${event?.sessionID??''}\0${e.id}\0${e.original}`).digest('hex').slice(0,32)}`;
           const already=plannedDrops.has(e.id);
-          if(!already||!vault.has(refId)){
-            if(newDrops){
-              try{vault.store(refId,e,event?.sessionID);}catch{/* best-effort vault store */}
-            }
-          }
           if(vault.has(refId)){
             const lines=e.original.split('\n').length;
             const estTok=Math.max(1,Math.ceil(e.length/3));
@@ -1070,7 +1103,7 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
           }else if(already){
             replacement=expiredNotice(refId,e.name);
           }else{
-            // New drop failed to persist to vault: fail closed and preserve original output.
+            // New drop failed to persist or was evicted within the same batch: fail closed and preserve original output.
             continue;
           }
         }

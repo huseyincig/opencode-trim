@@ -37,6 +37,7 @@ export interface PressureEstimate {
   reportedTokens?: number;
   /** Token count the ratio is based on: real provider tokens when available, else the byte estimate. */
   effectiveTokens: number;
+  overheadTokens?: number;
   breakdown?: ContextBreakdown;
   diagnostics?: ContextDiagnostics;
 }
@@ -131,8 +132,8 @@ function extractMsgReportedTokens(msg: any): number | undefined {
   return undefined;
 }
 /** Only estimates model-visible text; media tokens are not predictable from these hooks. */
-/** Real provider token counts keyed by assistant message id (e.g. from session.step.ended), plus drops already reflected in them. */
-export interface NativeTokenInfo { tokens: Map<string, number>; baselineChars?: number }
+/** Real provider token counts keyed by assistant message id (e.g. from session.step.ended), plus drops and overhead baseline already reflected in them. */
+export interface NativeTokenInfo { tokens: Map<string, number>; baselineChars?: number; baselineOverheadTokens?: number }
 export function sumPrunedMsgChars(messages: unknown): number {
   if(!Array.isArray(messages)) return 0;
   let total=0;
@@ -143,6 +144,7 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
   const model=resolveModelLimit(event,modelLimits,options);
   let estimatedTokens=0;
   let estimatedChars=0; // visible text chars counted by the same walk as estimatedTokens
+  let overheadTokens=0;
   let systemChars=0;
   let chatChars=0;
   let toolChars=0;
@@ -159,7 +161,9 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
     const text=limitedStringify(part);
     estimatedChars+=text.length;
     systemChars+=text.length;
-    estimatedTokens+=estimateTokens(text);
+    const tok=estimateTokens(text);
+    estimatedTokens+=tok;
+    overheadTokens+=tok;
   }
   const toolCharsByName=new Map<string, number>();
   const SAFE_TOOL_NAME=/^[a-z0-9_.:-]{1,32}$/i;
@@ -228,13 +232,17 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
     toolSchemaChars+=len;
     estimatedChars+=len;
     systemChars+=len;
-    estimatedTokens+=estimateTokens(name)+estimateTokens(text);
+    const tok=estimateTokens(name)+estimateTokens(text);
+    estimatedTokens+=tok;
+    overheadTokens+=tok;
   }
   const topTools: ToolBloatEntry[]=[...toolCharsByName.entries()]
     .sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))
     .slice(0,3)
     .map(([name,chars])=>({name,chars}));
-  const reportedTokens=lastReportedBase!==undefined ? lastReportedBase+trailingAfterReported : undefined;
+  const overheadDelta=lastFromNative && typeof native?.baselineOverheadTokens==='number' && Number.isFinite(native.baselineOverheadTokens)
+    ? Math.max(0,overheadTokens-native.baselineOverheadTokens) : 0;
+  const reportedTokens=lastReportedBase!==undefined ? lastReportedBase+trailingAfterReported+overheadDelta : undefined;
   // Real counts for the latest assistant step are authoritative (they match the OpenCode screen); the byte estimate
   // is only a floor for provider counts embedded in messages and the fallback when no real count exists.
   const effectiveTokens=reportedTokens!==undefined ? (lastFromNative ? reportedTokens : Math.max(estimatedTokens,reportedTokens)) : estimatedTokens;
@@ -246,7 +254,7 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
   const usable=context && context>reserve ? context-reserve:undefined;
   const ratio=usable ? effectiveTokens/usable:undefined;
   const out: PressureEstimate = {estimatedTokens,estimatedChars,modelContext:context,modelSource:model.source,usableTokens:usable,
-    ratio,estimated:true,mediaPresent,effectiveTokens,breakdown:{systemChars,chatChars,toolChars},
+    ratio,estimated:true,mediaPresent,effectiveTokens,overheadTokens,breakdown:{systemChars,chatChars,toolChars},
     diagnostics:{toolSchemaChars,toolCount,topTools}};
   if(reportedTokens!==undefined) out.reportedTokens=reportedTokens;
   return out;

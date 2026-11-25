@@ -27,6 +27,7 @@ const PREFIX_VALUE_OPTS: Record<string, Set<string>> = {
   env: new Set(["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]),
   nice: new Set(["-n", "--adjustment"]),
   time: new Set(["-f", "-o", "--format", "--output"]),
+  timeout: new Set(["-k", "-s", "--kill-after", "--signal"]),
   exec: new Set(["-a"]),
   command: new Set<string>(), nohup: new Set<string>(),
 };
@@ -54,6 +55,9 @@ export function skipPrefixWords(words: readonly unknown[], start: number = 0): n
       i++;
       if (opt === "--") break;
       if (valueOpts.has(opt)) i++;
+    }
+    if (name === "timeout" && i < words.length && /^\d+(?:\.\d+)?[smhd]?$/i.test(String(words[i]))) {
+      i++;
     }
   }
   return i;
@@ -145,10 +149,10 @@ function optionsOf(args: string[]): string[] {
   return i < 0 ? args : args.slice(0, i);
 }
 
-/** Option that makes log/stash print patch-like content (-p/-u/-c/-m, --cc, word/color-words diffs...). */
+/** Option that makes log/stash print patch-like content (-p/-u/-c/-m/-L/-U, --cc, --full-diff, --unified, --textconv, --ext-diff, word/color-words diffs...). */
 function isPatchArg(a: string): boolean {
-  return /^--(?:patch|patch-with-stat|patch-with-raw|cc|remerge-diff|diff-merges|word-diff|color-words)(?:=|$)/.test(a) ||
-    /^-[A-Za-z]*[pucm][A-Za-z0-9]*$/.test(a) || /^-[pu]\d*$/.test(a);
+  return /^--(?:patch|patch-with-stat|patch-with-raw|cc|remerge-diff|diff-merges|word-diff|color-words|full-diff|unified|textconv|ext-diff)(?:=|$)/.test(a) ||
+    /^-[A-Za-z]*[pucm][A-Za-z0-9]*$/.test(a) || /^-(?:[pu]\d*|L|U\d*)$/.test(a);
 }
 
 /** True when this single git call prints patch/diff content (or may). */

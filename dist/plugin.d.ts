@@ -31,6 +31,8 @@ export declare class ToolDedupeRing {
     rings: Map<string, any[]>;
     seq: Map<string, number>;
     constructor(windowSize?: number, minChars?: number);
+    lookup(sessionID: string, tool: string, command: string, text: string): string | null;
+    record(sessionID: string, tool: string, command: string, text: string, stubbed?: boolean): void;
     check(sessionID: string, tool: string, command: string, text: string): string | null;
     reset(sessionID?: string): void;
     clear(): void;

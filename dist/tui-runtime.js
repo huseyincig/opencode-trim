@@ -16,7 +16,22 @@ import { buildGainReport, buildHeader, buildSidebarModel, compactionBreakdown, c
 const DEBOUNCE_MS = 150;
 const POLL_MS = 2000;
 const IDLE_TICK_MS = 30_000;
+const RPC_TIMEOUT_MS = 10_000;
 const MAX_HIDDEN_RETRIES = 3;
+function withTimeout(promise, ms = RPC_TIMEOUT_MS) {
+  let timer;
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("opencode-trim TUI request timed out")), ms);
+    timer.unref?.();
+    promise.then(value => {
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    }, err => {
+      if (timer) clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
 const COLLAPSED_BAR_WIDTH = 14;
 const EXPANDED_BAR_WIDTH = 34;
 const REFRESH_EVENTS = ["session.compaction.started", "session.compaction.ended", "session.compaction.failed", "session.step.ended", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"];
@@ -284,11 +299,11 @@ export default Plugin.define({
             // Probe RPC first: when server tui.enabled is false, avoid unnecessary message/model sync calls.
             let next;
             try {
-              next = await rpc.snapshot({
+              next = await withTimeout(Promise.resolve(rpc.snapshot({
                 sessionID
               }, context.location ? {
                 location: context.location
-              } : undefined);
+              } : undefined)));
               if (disposed || mine !== seq) return;
               if (next && typeof next.sessionID === "string" && next.sessionID !== sessionID) {
                 next = null;
@@ -323,7 +338,7 @@ export default Plugin.define({
             try {
               const messages = context.data?.session?.message;
               if (messages && typeof messages.list === "function") {
-                let list = await Promise.resolve(messages.list(sessionID));
+                let list = await withTimeout(Promise.resolve(messages.list(sessionID)));
                 let msgKey = messageListKey(list);
                 const unchanged = msgKey === lastMsgKey && (hasServerBreakdown || !lastHadServerBreakdown);
                 if (!unchanged) {
@@ -332,9 +347,9 @@ export default Plugin.define({
                     // The TUI message cache is empty until synced; sync at most once per session mount.
                     messagesSynced = true;
                     try {
-                      await Promise.resolve(messages.sync(sessionID));
+                      await withTimeout(Promise.resolve(messages.sync(sessionID)));
                     } catch {}
-                    list = await Promise.resolve(messages.list(sessionID));
+                    list = await withTimeout(Promise.resolve(messages.list(sessionID)));
                     msgKey = messageListKey(list);
                     tokens = nativeContextTokens(list);
                   }
@@ -374,7 +389,7 @@ export default Plugin.define({
               }
             }
             try {
-              const meta = await resolveSessionMeta(sessionID);
+              const meta = await withTimeout(resolveSessionMeta(sessionID));
               if (!disposed && mine === seq) {
                 setNativeLimit(meta.limit);
                 setSessionCreatedAt(meta.createdAt);

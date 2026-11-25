@@ -18,7 +18,7 @@ export const DEFAULTS = Object.freeze({
     keepRecentToolResults: 8,
     pruneAfterToolChars: 75000,
     pruneMinResultChars: 800,
-    pruneEligibleTools: ["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find", "webfetch"],
+    pruneEligibleTools: Object.freeze(["shell", "bash", "read", "grep", "glob", "ls", "list", "search", "find", "webfetch"]),
     pressureStartRatio: 0.65,
     pressureForceRatio: 0.85,
     pressureCriticalRatio: 0.94,
@@ -33,7 +33,7 @@ export const DEFAULTS = Object.freeze({
     dedupeWindow: 8,
     cacheTtlMs: 300_000,
     cacheMinSavingsChars: 6000,
-    filterRules: [],
+    filterRules: Object.freeze([]),
     memory: Object.freeze({ enabled: false, agentAllowlist: Object.freeze([]), agentDenylist: Object.freeze([]), retentionDays: 60 }),
     tui: Object.freeze({ enabled: false }),
 });

@@ -127,6 +127,7 @@ export function estimateRequest(event, modelLimits, options, native) {
     const model = resolveModelLimit(event, modelLimits, options);
     let estimatedTokens = 0;
     let estimatedChars = 0; // visible text chars counted by the same walk as estimatedTokens
+    let overheadTokens = 0;
     let systemChars = 0;
     let chatChars = 0;
     let toolChars = 0;
@@ -143,7 +144,9 @@ export function estimateRequest(event, modelLimits, options, native) {
         const text = limitedStringify(part);
         estimatedChars += text.length;
         systemChars += text.length;
-        estimatedTokens += estimateTokens(text);
+        const tok = estimateTokens(text);
+        estimatedTokens += tok;
+        overheadTokens += tok;
     }
     const toolCharsByName = new Map();
     const SAFE_TOOL_NAME = /^[a-z0-9_.:-]{1,32}$/i;
@@ -230,13 +233,17 @@ export function estimateRequest(event, modelLimits, options, native) {
         toolSchemaChars += len;
         estimatedChars += len;
         systemChars += len;
-        estimatedTokens += estimateTokens(name) + estimateTokens(text);
+        const tok = estimateTokens(name) + estimateTokens(text);
+        estimatedTokens += tok;
+        overheadTokens += tok;
     }
     const topTools = [...toolCharsByName.entries()]
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
         .slice(0, 3)
         .map(([name, chars]) => ({ name, chars }));
-    const reportedTokens = lastReportedBase !== undefined ? lastReportedBase + trailingAfterReported : undefined;
+    const overheadDelta = lastFromNative && typeof native?.baselineOverheadTokens === 'number' && Number.isFinite(native.baselineOverheadTokens)
+        ? Math.max(0, overheadTokens - native.baselineOverheadTokens) : 0;
+    const reportedTokens = lastReportedBase !== undefined ? lastReportedBase + trailingAfterReported + overheadDelta : undefined;
     // Real counts for the latest assistant step are authoritative (they match the OpenCode screen); the byte estimate
     // is only a floor for provider counts embedded in messages and the fallback when no real count exists.
     const effectiveTokens = reportedTokens !== undefined ? (lastFromNative ? reportedTokens : Math.max(estimatedTokens, reportedTokens)) : estimatedTokens;
@@ -248,7 +255,7 @@ export function estimateRequest(event, modelLimits, options, native) {
     const usable = context && context > reserve ? context - reserve : undefined;
     const ratio = usable ? effectiveTokens / usable : undefined;
     const out = { estimatedTokens, estimatedChars, modelContext: context, modelSource: model.source, usableTokens: usable,
-        ratio, estimated: true, mediaPresent, effectiveTokens, breakdown: { systemChars, chatChars, toolChars },
+        ratio, estimated: true, mediaPresent, effectiveTokens, overheadTokens, breakdown: { systemChars, chatChars, toolChars },
         diagnostics: { toolSchemaChars, toolCount, topTools } };
     if (reportedTokens !== undefined)
         out.reportedTokens = reportedTokens;

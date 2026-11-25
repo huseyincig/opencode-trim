@@ -271,7 +271,7 @@ export async function setupMemory(ctx, opts, hooks) {
         callHook(hooks?.onReady, { project, store, dbPath, vault, forgetSession });
         const isAgentAllowed = (holder) => {
             const agent = agentOf(holder);
-            if (agent && deny.has(agent))
+            if (deny.size && (!agent || deny.has(agent)))
                 return false;
             if (allow.size && (!agent || !allow.has(agent)))
                 return false;
@@ -540,6 +540,8 @@ export async function setupMemory(ctx, opts, hooks) {
                         }
                     }
                 }
+                if (event?.kind === 'compaction' || event?.kind === 'title' || event?.kind === 'generate')
+                    return;
                 const wait = awaitingAfter.get(sid);
                 if (!wait)
                     return;

@@ -4,13 +4,14 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { compressOutput } from '../src/compress.ts';
-import { parseOptions } from '../src/config.ts';
-import { applyLineFilters, programOf } from '../src/filters.ts';
+import { compressOutput, compactListPaths, dedupToolOutput } from '../src/compress.ts';
+import { DEFAULTS, parseOptions } from '../src/config.ts';
+import { applyLineFilters, isProtectedCommand, programOf } from '../src/filters.ts';
 import { openMemoryStore, MAX_TEXT_CHARS } from '../src/memory-store.ts';
 import { setupMemory, TOOL_NAME, EXPAND_TOOL_NAME } from '../src/memory.ts';
 import { processToolEvent, setupTrim, ToolDedupeRing } from '../src/plugin.ts';
-import { pruneContext, recoverableNotice } from '../src/prune.ts';
+import { estimateRequest } from '../src/pressure.ts';
+import { pruneContext, recoverableNotice, PRUNED_ERROR_INPUT } from '../src/prune.ts';
 import {
   acquireSessionLease,
   callMeshRpc,
@@ -239,6 +240,27 @@ test('TRM-011 & TRM-012: ToolDedupeRing respects protected commands, structured 
   // TRM-012a: Two identical text parts inside the SAME tool call must NOT stub the second part against the first part of the same call
   processToolEvent(evArr1, opts, undefined, rt);
   assert.doesNotMatch(evArr1.result.content[1].text, /withheld — byte-identical/);
+
+  // TRIM-R2-083: failed assignResult on frozen event must not poison ring, and pruning invalidates ring
+  const ring2 = new ToolDedupeRing(8, 200);
+  const rt2 = { directory: '/proj', dedupeRing: ring2, sessionID: 's-freeze' };
+  const plain = Array.from({ length: 40 }, (_, i) => `plain status line ${i} ok`).join('\n');
+  const mutableEv1: any = { status: 'completed', sessionID: 's-freeze', tool: 'shell', input: { command: 'echo ok' }, result: { content: plain } };
+  const frozenEv2: any = Object.freeze({ status: 'completed', sessionID: 's-freeze', tool: 'shell', input: { command: 'echo ok' }, result: { content: plain } });
+  const mutableEv2: any = { status: 'completed', sessionID: 's-freeze', tool: 'shell', input: { command: 'echo ok' }, result: { content: plain } };
+  assert.equal(processToolEvent(mutableEv1, opts, undefined, rt2), false);
+  // Frozen event cannot apply stub via assignResult -> returns false and leaves content untouched
+  assert.equal(processToolEvent(frozenEv2, opts, undefined, rt2), false);
+  assert.equal(frozenEv2.result.content, plain);
+  // Mutable second call still deduplicates against mutableEv1
+  const deduped = processToolEvent(mutableEv2, opts, undefined, rt2);
+  assert.equal(deduped, true);
+  assert.match(mutableEv2.result.content, /withheld — byte-identical/);
+  // Resetting ring (as setupTrim does on pruneContext drops) clears prior entries
+  ring2.reset('s-freeze');
+  const afterPruneEv: any = { status: 'completed', sessionID: 's-freeze', tool: 'shell', input: { command: 'echo ok' }, result: { content: plain } };
+  assert.equal(processToolEvent(afterPruneEv, opts, undefined, rt2), false);
+  assert.equal(afterPruneEv.result.content, plain);
 });
 
 // ── WAVE 2 ────────────────────────────────────────────────────────────────────
@@ -529,4 +551,418 @@ test('TRM-008, TRM-044, TRM-045, TRM-047, TRM-049, TRM-064: mesh bridge provenan
   assert.equal(getBlockingSessionLease('s-evict-0', 'orchestration_dispatch', 'orch'), undefined, 'evicted remote lease must release its underlying session lease');
   await disposeHost64();
   for (let i = 0; i <= 520; i++) forgetMeshSession(`s-evict-${i}`);
+});
+
+// ── ROUND-2 AUDIT HARDENING (WAVES 1–3) ───────────────────────────────────────
+
+test('R2 Wave 1 — TRIM-R2-011 & TRIM-R2-022 & TRIM-R2-052 & TRIM-R2-053: regex ReDoS quantifiers, expired vault re-insert, post-redaction 1M cap, exact listVault count', () => {
+  const store = openMemoryStore({ dbPath: ':memory:', project: '/proj', retentionDays: 1, maxVaultRows: 600 });
+  store.saveVault({ project: '/proj', session_id: 's1', ref_id: 'trm_r2_re', tool: 'shell', target: 'run', text: 'a'.repeat(80) + '!' });
+
+  // TRIM-R2-011: adjacent overlapping quantifiers, chained wildcards, and Cox exponential optional chains must be rejected
+  for (const evil of [
+    'a+a+a+a+$',
+    '[a-z]+[a-z]+[a-z]+$',
+    '.*.*.*.*!$',
+    'a+b?a+b?a+$',
+    '.*x.*y.*z!$',
+    'a{1,2}a{1,2}a{1,2}$',
+    'a?'.repeat(12) + 'a'.repeat(12),
+  ]) {
+    assert.throws(
+      () => store.getVault({ project: '/proj', ref_id: 'trm_r2_re', grep: evil, regex: true }),
+      /invalid or unsafe grep regex/i,
+      `unsafe regex should be rejected: ${evil}`,
+    );
+  }
+  // Safe multi-token grep regex still works
+  assert.equal(store.getVault({ project: '/proj', ref_id: 'trm_r2_re', grep: '^a+!$', regex: true }).matchedLines, 1);
+
+  // TRIM-R2-022: expired physical vault row must NOT block re-inserting the same ref_id
+  const expiredTs = Date.now() - 10 * 86_400_000;
+  store.saveVault({ project: '/proj', session_id: 's1', ref_id: 'trm_expired_ref', tool: 'shell', target: 'echo', text: 'expired payload', created_at: expiredTs });
+  assert.equal(store.hasVault('/proj', 'trm_expired_ref'), false);
+  store.saveVault({ project: '/proj', session_id: 's2', ref_id: 'trm_expired_ref', tool: 'shell', target: 'echo', text: 'expired payload' });
+  assert.equal(store.hasVault('/proj', 'trm_expired_ref'), true, 're-saving an expired ref_id must succeed and be visible to hasVault');
+
+  // TRIM-R2-052: post-redaction vault text must never exceed MAX_TEXT_CHARS
+  const capDir = mkdtempSync(join(tmpdir(), 'trim-r2-cap-'));
+  const capDb = join(capDir, 'memory.db');
+  try {
+    const capStore = openMemoryStore({ dbPath: capDb, project: '/proj' });
+    const expandingSecrets = 'PIN=1234 '.repeat(50_000) + 'x'.repeat(550_000); // 1,000,000 chars before redaction -> 1,300,000 after if unclamped
+    assert.equal(expandingSecrets.length, MAX_TEXT_CHARS);
+    const savedCap = capStore.saveVault({ project: '/proj', session_id: 's1', ref_id: 'trm_expand_cap', tool: 'shell', target: 'env', text: expandingSecrets });
+    assert.equal(savedCap.truncated, true);
+    capStore.close();
+    const rawCap = new DatabaseSync(capDb);
+    const rowCap: any = rawCap.prepare("SELECT length(text) AS len FROM vault WHERE ref_id = 'trm_expand_cap'").get();
+    rawCap.close();
+    assert.ok(Number(rowCap?.len) <= MAX_TEXT_CHARS, `stored redacted vault text must be <= ${MAX_TEXT_CHARS}, got ${rowCap?.len}`);
+  } finally {
+    rmSync(capDir, { recursive: true, force: true });
+  }
+  // Verify TRIM-R2-053 exact totalVaultRows > 500
+  const base = Date.now();
+  for (let i = 0; i < 510; i++) {
+    store.saveVault({ project: '/proj', session_id: 's1', ref_id: `trm_row_${i}`, tool: 'shell', target: 'ls', text: `row ${i}`, created_at: base + i });
+  }
+  const listed = store.listVault({ project: '/proj', limit: 5 });
+  assert.ok(listed.totalVaultRows >= 510, `expected exact totalVaultRows >= 510, got ${listed.totalVaultRows}`);
+  store.close();
+});
+
+test('R2 Wave 1 — TRIM-R2-001, TRIM-R2-002, TRIM-R2-006, TRIM-R2-008: split error-input tail protection, all-tool INSTRUCTION_PATH, two-phase vault batch eviction, redacted preview', () => {
+  const opts = parseOptions({
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneAfterToolChars: 10000,
+    pruneMinResultChars: 400,
+    prunePreviewLines: 2,
+  });
+
+  // TRIM-R2-001: tool-call is OUTSIDE protected tail AND tokenTail (mi=0), but its error tool-result is INSIDE protected tail (mi=6 of 7)
+  const bigInput = 'const failingPayload = 1;\n'.repeat(60);
+  const splitErrMsgs: any[] = [
+    { id: 'c0', role: 'assistant', content: [{ type: 'tool-call', id: 'err-split', name: 'write', input: { filePath: 'src/x.ts', content: bigInput } }] },
+    ...Array.from({ length: 5 }, (_, i) => ({ id: `mid-${i}`, role: i % 2 ? 'assistant' : 'user', content: `mid ${i} ` + 'm'.repeat(1200) })),
+    { id: 'r-tail', role: 'tool', content: [{ type: 'tool-result', id: 'err-split', name: 'write', result: { type: 'error', value: 'EACCES: denied' } }] },
+  ];
+  const r001 = pruneContext({ sessionID: 's-001', messages: splitErrMsgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 } });
+  assert.equal(r001.pruned, 0, 'error input whose result is inside protected tail must stay protected');
+  assert.equal(splitErrMsgs[0].content[0].input.content, bigInput);
+
+  // TRIM-R2-002: grep and custom read-only suffixed tools targeting INSTRUCTION_PATH stay protected
+  const tail = Array.from({ length: 6 }, (_, i) => ({ id: `t${i}`, role: i % 2 ? 'assistant' : 'user', content: `u${i} ` + 'z'.repeat(1200) }));
+  const instrOut = 'policy directive line\n'.repeat(60);
+  const instrMsgs: any[] = [
+    { id: 'g0', role: 'assistant', content: [{ type: 'tool', id: 'cg0', tool: 'grep', input: { pattern: 'rule', path: '/proj/AGENTS.md' }, state: { status: 'completed', output: instrOut } }] },
+    { id: 'z0', role: 'assistant', content: [{ type: 'tool', id: 'cz0', tool: 'code_read', input: { filePath: '/proj/SECURITY.md' }, state: { status: 'completed', output: instrOut } }] },
+    { id: 'r1', role: 'assistant', content: [{ type: 'tool', id: 'cr1', tool: 'shell', input: { command: 'echo ok' }, state: { status: 'completed', output: 'ok\n'.repeat(300) } }] },
+    ...tail,
+  ];
+  pruneContext({ sessionID: 's-002', messages: instrMsgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 } });
+  assert.equal(instrMsgs[0].content[0].state.output, instrOut, 'grep on AGENTS.md must stay protected');
+  assert.equal(instrMsgs[1].content[0].state.output, instrOut, 'code_read on SECURITY.md must stay protected');
+
+  // TRIM-R2-006: single-batch vault eviction must never leave a dangling recoverableNotice
+  const tinyStore = openMemoryStore({ dbPath: ':memory:', project: '/proj', maxVaultRows: 2 });
+  const tinyVault = {
+    store(refId: string, entry: any, sid?: string) {
+      return tinyStore.saveVault({ project: '/proj', session_id: sid ?? null, ref_id: refId, tool: entry.name, target: 'cmd', text: entry.original }).saved;
+    },
+    has(refId: string) { return tinyStore.hasVault('/proj', refId); },
+  };
+  const batchMsgs: any[] = [
+    { id: 'b0', role: 'assistant', content: [{ type: 'tool', id: 'cb0', tool: 'shell', input: { command: 'echo 0' }, state: { status: 'completed', output: 'batch0\n'.repeat(120) } }] },
+    { id: 'b1', role: 'assistant', content: [{ type: 'tool', id: 'cb1', tool: 'shell', input: { command: 'echo 1' }, state: { status: 'completed', output: 'batch1\n'.repeat(120) } }] },
+    { id: 'b2', role: 'assistant', content: [{ type: 'tool', id: 'cb2', tool: 'shell', input: { command: 'echo 2' }, state: { status: 'completed', output: 'batch2\n'.repeat(120) } }] },
+    { id: 'b3', role: 'assistant', content: [{ type: 'tool', id: 'cb3', tool: 'shell', input: { command: 'echo recent' }, state: { status: 'completed', output: 'recent\n'.repeat(120) } }] },
+    ...tail,
+  ];
+  pruneContext({ sessionID: 's-006', messages: batchMsgs }, { ...opts, prunePreviewLines: 0 }, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 }, vault: tinyVault });
+  for (let i = 0; i < 3; i++) {
+    const out = batchMsgs[i].content[0].state.output;
+    const m = out.match(/ref "(trm_[0-9a-f]+)"/);
+    if (m) {
+      assert.equal(tinyStore.hasVault('/proj', m[1]), true, `committed recoverableNotice ref ${m[1]} at msg ${i} must actually exist in vault`);
+    }
+  }
+  tinyStore.close();
+
+  // TRIM-R2-008: preview notice lines must redact secrets
+  const secretOut = [
+    'API_KEY=sk-live-secret1234567890abcdef',
+    'header line 2',
+    ...Array.from({ length: 40 }, (_, i) => `normal log line ${i} padding text`),
+    'footer line 1',
+    'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123def456',
+  ].join('\n');
+  const secMsgs: any[] = [
+    { id: 'sec0', role: 'assistant', content: [{ type: 'tool', id: 'csec0', tool: 'shell', input: { command: 'echo logs' }, state: { status: 'completed', output: secretOut } }] },
+    { id: 'sec1', role: 'assistant', content: [{ type: 'tool', id: 'csec1', tool: 'shell', input: { command: 'echo recent' }, state: { status: 'completed', output: 'r\n'.repeat(300) } }] },
+    ...tail,
+  ];
+  const r008 = pruneContext({ sessionID: 's-008', messages: secMsgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 } });
+  assert.equal(r008.pruned, 1);
+  const previewed = secMsgs[0].content[0].state.output;
+  assert.doesNotMatch(previewed, /sk-live-secret1234567890abcdef/, 'preview head must redact secrets');
+  assert.doesNotMatch(previewed, /eyJhbGciOiJIUzI1NiJ9/, 'preview tail must redact JWT tokens');
+  assert.match(previewed, /\[REDACTED\]/);
+});
+
+test('R2 Wave 1 — TRIM-R2-004, TRIM-R2-005 & TRIM-R2-009: dedupe failure protection, post-transform commit fidelity, and fail-closed denylist on missing agent', async () => {
+  const opts = parseOptions({ minOutputChars: 200, maxOutputLines: 25, maxOutputChars: 2500, minSavingsRatio: 0.1, dedupeWindow: 8 });
+  const ring = new ToolDedupeRing(8, 200);
+  const rt = { directory: '/proj', dedupeRing: ring, sessionID: 's-r2-dedupe' };
+
+  // TRIM-R2-004: repeated output with exitCode=0 but failure text MUST NOT be stubbed by dedupe ring
+  const errBody = 'Starting check...\n' + 'ok line\n'.repeat(40) + 'ERROR: Permission denied accessing /etc/shadow\n';
+  const e1: any = { status: 'completed', sessionID: 's-r2-dedupe', tool: 'shell', input: { command: 'echo check', exitCode: 0 }, result: { content: errBody, output: { exitCode: 0 } } };
+  const e2: any = { status: 'completed', sessionID: 's-r2-dedupe', tool: 'shell', input: { command: 'echo check', exitCode: 0 }, result: { content: errBody, output: { exitCode: 0 } } };
+  processToolEvent(e1, opts, undefined, rt);
+  processToolEvent(e2, opts, undefined, rt);
+  assert.doesNotMatch(e2.result.content, /withheld — byte-identical/, 'diagnostic/failure output must never be withheld by dedupe ring');
+  assert.match(e2.result.content, /Permission denied/);
+
+  // TRIM-R2-005: if call 1 was compressed, call 2 stub must reference the post-compression committed text, not unverified raw, and failed assignResult must not record
+  const ring5 = new ToolDedupeRing(8, 200);
+  const rt5 = { directory: '/proj', dedupeRing: ring5, sessionID: 's-r2-5' };
+  const noisy = Array.from({ length: 80 }, (_, i) => `npm notice chatter ${i}`).join('\n') + '\nadded 5 packages in 1s';
+  const frozenFirst: any = Object.freeze({ status: 'completed', sessionID: 's-r2-5', tool: 'shell', input: { command: 'npm install' }, result: { content: noisy } });
+  const secondAfterFrozen: any = { status: 'completed', sessionID: 's-r2-5', tool: 'shell', input: { command: 'npm install' }, result: { content: noisy } };
+  assert.equal(processToolEvent(frozenFirst, opts, undefined, rt5), false);
+  processToolEvent(secondAfterFrozen, opts, undefined, rt5);
+  assert.doesNotMatch(secondAfterFrozen.result.content, /withheld — byte-identical/, 'failed assignResult on first call must not cause second call to stub');
+
+  // TRIM-R2-009: denylist configured + missing agent must fail closed
+  let beforeGate: any;
+  const tools = new Map<string, any>();
+  const ctx: any = {
+    location: { directory: '/tmp/trim-r2-acl' },
+    tool: {
+      hook: async (name: string, cb: any) => { if (name === 'execute.before') beforeGate = cb; return { dispose() {} }; },
+      transform: async (fn: any) => { fn({ add: (t: any) => tools.set(t.name, t) }); return { dispose() {} }; },
+    },
+    session: { hook: async () => ({ dispose() {} }) },
+    event: { subscribe: async () => ({ async *[Symbol.asyncIterator]() {} }) },
+  };
+  const stop = await setupMemory(ctx, parseOptions({ memory: { enabled: true, dbPath: ':memory:', agentDenylist: ['blocked'] } }));
+  assert.throws(() => beforeGate({ tool: TOOL_NAME, location: { directory: '/tmp/trim-r2-acl' } }), /not available/i, 'missing agent with active denylist must fail closed in execute.before');
+  await assert.rejects(() => tools.get(TOOL_NAME).execute({ recent: true }, { sessionID: 's1' }), /not available/i, 'missing agent with active denylist must fail closed in execute()');
+  await stop();
+});
+
+test('R2 Wave 2 — TRIM-R2-007, 014, 018, 026, 027, 029, 032, 033, 038, 039, 051, 070, 072, 077', async () => {
+  const opts = parseOptions({ protectRecentMessages: 4, protectRecentTokens: 1024, keepRecentToolResults: 1, pruneAfterToolChars: 10000, pruneMinResultChars: 400, prunePreviewLines: 0 });
+  const tail = Array.from({ length: 6 }, (_, i) => ({ id: `t${i}`, role: i % 2 ? 'assistant' : 'user', content: `u${i} ` + 'z'.repeat(1200) }));
+
+  // TRIM-R2-007: growing system/tool overhead increases native-anchored effectiveTokens
+  const limits = new Map([['p/m', { context: 200_000, output: 8192 }]]);
+  const smallReq = {
+    model: { providerID: 'p', id: 'm' },
+    system: [{ type: 'text', text: 'sys' }],
+    tools: {},
+    messages: [{ id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'ok' }] }],
+  };
+  const bigReq = {
+    model: { providerID: 'p', id: 'm' },
+    system: [{ type: 'text', text: 'sys ' + 's'.repeat(30_000) }],
+    tools: { big: { description: 'd'.repeat(30_000) } },
+    messages: [{ id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'ok' }] }],
+  };
+  const pSmall = estimateRequest(smallReq, limits, opts, { tokens: new Map([['a1', 5000]]), baselineChars: 0, baselineOverheadTokens: 10 });
+  const pBig = estimateRequest(bigReq, limits, opts, { tokens: new Map([['a1', 5000]]), baselineChars: 0, baselineOverheadTokens: 10 });
+  assert.ok(pBig.effectiveTokens > pSmall.effectiveTokens + 15_000, `expected growing system+tools overhead to raise effectiveTokens, got small=${pSmall.effectiveTokens} big=${pBig.effectiveTokens}`);
+
+  // TRIM-R2-014: exceeding MAX_PARTS_TOTAL fails closed completely (0 pruned, not partial)
+  const hugeParts = Array.from({ length: 400 }, () => ({ type: 'text', text: 'a' }));
+  const overMsgs: any[] = [
+    { id: 'first', role: 'assistant', content: [{ type: 'tool', id: 'cf', tool: 'shell', input: { command: 'echo ok' }, state: { status: 'completed', output: 'o'.repeat(1200) } }] },
+    ...Array.from({ length: 130 }, (_, i) => ({ id: `ov-${i}`, role: i % 2 ? 'assistant' : 'user', content: hugeParts })),
+    ...tail,
+  ];
+  const r014 = pruneContext({ sessionID: 's-014', messages: overMsgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 } });
+  assert.equal(r014.pruned, 0, 'exceeding MAX_PARTS_TOTAL must fail closed without pruning earlier collected candidates');
+
+  // TRIM-R2-018: mesh protection on tool-call protects its paired tool-result
+  const callProtectedMeta = stampMeshMetadata('s-018', { owner: 'peer-policy', kind: 'task-contract', protected: true });
+  const m018: any[] = [
+    { id: 'c18', role: 'assistant', content: [{ type: 'tool-call', id: 'tc18', name: 'shell', metadata: callProtectedMeta, input: { command: 'echo ok' } }] },
+    { id: 'r18', role: 'tool', content: [{ type: 'tool-result', id: 'tc18', name: 'shell', result: { type: 'text', value: 'v'.repeat(1200) } }] },
+    { id: 'rec', role: 'assistant', content: [{ type: 'tool', id: 'crec', tool: 'shell', input: { command: 'echo r' }, state: { status: 'completed', output: 'r'.repeat(1200) } }] },
+    ...tail,
+  ];
+  const r018 = pruneContext({ sessionID: 's-018', messages: m018 }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 } });
+  assert.equal(r018.pruned, 0, 'mesh-protected tool-call must also protect its paired tool-result');
+  forgetMeshSession('s-018');
+
+  // TRIM-R2-026: programOf handles sudo -u user and timeout 30 wrappers
+  assert.equal(programOf('sudo -u root npm install'), 'npm');
+  assert.equal(programOf('timeout 30 npm install'), 'npm');
+  assert.equal(programOf('timeout --signal=TERM 60 cargo build'), 'cargo');
+
+  // TRIM-R2-027: git log -L / --full-diff / -U5 are protected in isProtectedCommand
+  assert.equal(isProtectedCommand('git log -L 1,5:src/a.ts'), true);
+  assert.equal(isProtectedCommand('git log --full-diff'), true);
+  assert.equal(isProtectedCommand('git log -U5'), true);
+
+  // TRIM-R2-029: ANSI-wrapped JSON is recognized as structured in dedupToolOutput & compactListPaths
+  const ansiJson = '\x1b[32m' + JSON.stringify({ items: Array.from({ length: 40 }, () => 'dup') }, null, 2) + '\x1b[0m';
+  assert.equal(dedupToolOutput(ansiJson, parseOptions({ minOutputChars: 200 })).changed, false);
+  const ansiJsonList = '\x1b[36m{\n' + '  "/proj/a/b.ts": 1,\n'.repeat(10) + '  "end": 2\n}\x1b[0m';
+  assert.equal(compactListPaths(ansiJsonList, '/proj').changed, false);
+
+  // TRIM-R2-032: edit diagnostic pruning respects toolFiltering: false
+  const editEv: any = {
+    status: 'completed',
+    tool: 'edit',
+    input: { filePath: 'src/a.ts' },
+    result: { metadata: { diagnostics: { '/proj/src/a.ts': [], '/proj/src/other.ts': [{ line: 1, message: 'x' }] } } },
+  };
+  assert.equal(processToolEvent(editEv, parseOptions({ shell: true, toolFiltering: false }), undefined, { directory: '/proj' }), false);
+
+  // TRIM-R2-033: execute.after respects isTrimMeshProtected (not just wasMeshBounded)
+  const protToolMeta = stampMeshMetadata('s-033', { owner: 'peer-policy', kind: 'remediation', protected: true });
+  const protShellEv: any = {
+    status: 'completed',
+    sessionID: 's-033',
+    tool: 'shell',
+    input: { command: 'npm install' },
+    result: {
+      metadata: protToolMeta,
+      content: Array.from({ length: 120 }, (_, i) => `npm notice chatter ${i}`).join('\n') + '\nadded 3 packages in 1s',
+    },
+  };
+  assert.equal(processToolEvent(protShellEv, parseOptions(), undefined, { sessionID: 's-033' }), false, 'mesh-protected tool output must not be compressed');
+  forgetMeshSession('s-033');
+
+  // TRIM-R2-038 & TRIM-R2-039 & TRIM-R2-070: model refresh generation order, disposed guard, and input=0 + cache.read>0 native tokens
+  let listResolvers: Array<(v: any) => void> = [];
+  let emitEv: ((e: any) => void) | null = null;
+  let closed = false;
+  let ctxHook: any;
+  let rpcH: any;
+  const ctx38: any = {
+    location: { directory: '/tmp/trim-r2-38' },
+    options: { tui: { enabled: true }, contextWindowCap: 0 },
+    model: {
+      list: () => new Promise((resolve) => { listResolvers.push(resolve); }),
+    },
+    tool: { hook: async () => ({ dispose() {} }) },
+    session: { hook: async (name: string, cb: any) => { if (name === 'context') ctxHook = cb; return { dispose() {} }; } },
+    rpc: { register: async (_d: any, h: any) => { rpcH = h; return { events: { emit() {} }, dispose() {} }; } },
+    event: {
+      subscribe: async () => ({
+        [Symbol.asyncIterator]() {
+          return {
+            next() {
+              if (closed) return Promise.resolve({ value: undefined, done: true });
+              return new Promise((resolve) => { emitEv = (ev) => { emitEv = null; resolve({ value: ev, done: false }); }; });
+            },
+          };
+        },
+      }),
+    },
+  };
+  const stop38 = await setupTrim(ctx38);
+  await new Promise((r) => setTimeout(r, 10));
+  // Trigger two refreshes in order: refresh #1 (slow, stale 100k) and refresh #2 (fast, fresh 300k)
+  emitEv?.({ type: 'model.updated', location: { directory: '/tmp/trim-r2-38' } });
+  await new Promise((r) => setTimeout(r, 10));
+  emitEv?.({ type: 'model.updated', location: { directory: '/tmp/trim-r2-38' } });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(listResolvers.length >= 3);
+  // Resolve #2 (index 2) FIRST with 300k, then resolve #1 (index 1) and prewarm (index 0) with stale 100k
+  listResolvers[2]([{ providerID: 'p', id: 'm', limit: { context: 300_000, output: 8192 } }]);
+  await new Promise((r) => setTimeout(r, 10));
+  listResolvers[1]([{ providerID: 'p', id: 'm', limit: { context: 100_000, output: 8192 } }]);
+  listResolvers[0]([{ providerID: 'p', id: 'm', limit: { context: 100_000, output: 8192 } }]);
+  await new Promise((r) => setTimeout(r, 10));
+  // TRIM-R2-070: step.ended with input: 0 and cache.read: 42000 must be recognized as native tokens
+  emitEv?.({ type: 'session.step.ended', location: { directory: '/tmp/trim-r2-38' }, data: { sessionID: 's38', assistantMessageID: 'a38', tokens: { input: 0, cache: { read: 42_000 } } } });
+  await new Promise((r) => setTimeout(r, 10));
+  await ctxHook({ sessionID: 's38', model: { providerID: 'p', id: 'm' }, system: [], messages: [{ id: 'a38', role: 'assistant', content: 'hi' }], tools: {} });
+  const snap38 = await rpcH.snapshot({ sessionID: 's38' });
+  assert.equal(snap38.context.limitTokens, 300_000, 'older slow catalog fetch must not overwrite newer refresh');
+  assert.equal(snap38.context.estimatedTokens, 42_000, 'input=0 with cache.read>0 must count as native tokens');
+  closed = true;
+  await stop38();
+
+  // TRIM-R2-051: awaitingAfter must not be consumed by kind='title' | 'generate' | 'compaction'
+  const dir51 = mkdtempSync(join(tmpdir(), 'trim-r2-51-'));
+  const db51 = join(dir51, 'memory.db');
+  try {
+    let memCtxHook: any;
+    let memEmit: ((e: any) => void) | null = null;
+    let memClosed = false;
+    const ctx51: any = {
+      location: { directory: '/tmp/trim-r2-51' },
+      tool: { hook: async () => ({ dispose() {} }), transform: async () => ({ dispose() {} }) },
+      session: {
+        hook: async (name: string, cb: any) => { if (name === 'context') memCtxHook = cb; return { dispose() {} }; },
+        context: async () => [{ role: 'user', content: 'x'.repeat(3000) }],
+      },
+      event: {
+        subscribe: async () => ({
+          [Symbol.asyncIterator]() {
+            return {
+              next() {
+                if (memClosed) return Promise.resolve({ value: undefined, done: true });
+                return new Promise((resolve) => { memEmit = (ev) => { memEmit = null; resolve({ value: ev, done: false }); }; });
+              },
+            };
+          },
+        }),
+      },
+    };
+    const stop51 = await setupMemory(ctx51, parseOptions({ memory: { enabled: true, dbPath: db51 } }));
+    await new Promise((r) => setTimeout(r, 10));
+    memEmit?.({ type: 'session.compaction.ended', location: { directory: '/tmp/trim-r2-51' }, data: { sessionID: 's51', eventID: 'ev51', text: '## Objective\nImportant summary\n' } });
+    await new Promise((r) => setTimeout(r, 15));
+    // Auxiliary title/generate/compaction requests must NOT consume awaitingAfter
+    await memCtxHook({ sessionID: 's51', kind: 'title', location: { directory: '/tmp/trim-r2-51' }, system: [], messages: [{ role: 'user', content: 'tiny' }] });
+    await memCtxHook({ sessionID: 's51', kind: 'generate', location: { directory: '/tmp/trim-r2-51' }, system: [], messages: [{ role: 'user', content: 'tiny' }] });
+    // Real turn context request SHOULD consume awaitingAfter with its actual size (~2000 tokens)
+    await memCtxHook({ sessionID: 's51', kind: 'chat', location: { directory: '/tmp/trim-r2-51' }, system: [], messages: [{ role: 'user', content: 'real summary context '.repeat(300) }] });
+    memClosed = true;
+    await stop51();
+    const raw51 = new DatabaseSync(db51);
+    const row51: any = raw51.prepare("SELECT context_after_tokens FROM history WHERE event_id = 'ev51'").get();
+    raw51.close();
+    assert.ok(Number(row51?.context_after_tokens) > 1000, `expected awaitingAfter to measure real chat turn (>1000 tok), got ${row51?.context_after_tokens}`);
+  } finally {
+    rmSync(dir51, { recursive: true, force: true });
+  }
+
+  // TRIM-R2-072: smallJson must not invoke nested array/toJSON Proxy traps
+  let proxyTouched = false;
+  const evilArr = new Proxy(['a'], { get() { proxyTouched = true; return 'a'; } });
+  const m072: any[] = [
+    { id: 'p0', role: 'assistant', content: [{ type: 'tool', id: 'cp0', tool: 'grep', input: { pattern: 'foo', filters: evilArr }, state: { status: 'completed', output: 'line\n'.repeat(200) } }] },
+    { id: 'p1', role: 'assistant', content: [{ type: 'tool', id: 'cp1', tool: 'grep', input: { pattern: 'foo', filters: evilArr }, state: { status: 'completed', output: 'line\n'.repeat(200) } }] },
+    ...tail,
+  ];
+  pruneContext({ sessionID: 's-072', messages: m072 }, { ...opts, supersessionMinChars: 100 }, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 } });
+  assert.equal(proxyTouched, false, 'smallJson must not dereference nested Proxy');
+
+  // TRIM-R2-077: DEFAULTS arrays must be frozen
+  assert.equal(Object.isFrozen(DEFAULTS.pruneEligibleTools), true, 'DEFAULTS.pruneEligibleTools must be frozen');
+  assert.equal(Object.isFrozen(DEFAULTS.filterRules), true, 'DEFAULTS.filterRules must be frozen');
+
+  // TRIM-R2-057: TUI single-flight fetchNow must have a bounded timeout guard
+  const tuiSrc = readFileSync(new URL('../src/tui.tsx', import.meta.url), 'utf8');
+  assert.match(tuiSrc, /withTimeout|RPC_TIMEOUT_MS|AbortController/, 'TUI fetchNow must bound hung RPC/host promises with a timeout');
+});
+
+test('R2 Wave 3 — TRIM-R2-013, TRIM-R2-065 & TRIM-R2-066: fail-closed ledger without token, legacy expectedKind check, and lease TTL cap', async () => {
+  // TRIM-R2-013: when session provenance ledger exists, unsigned legacy metadata without token must fail closed
+  const sid13 = 'mesh-r2-013';
+  stampMeshMetadata(sid13, { owner: 'peer-policy', kind: 'remediation', protected: true });
+  const unsignedLegacy = {
+    type: 'synthetic',
+    synthetic: true,
+    metadata: { hi: { active: true } },
+  };
+  assert.equal(isTrustedMeshMessage(unsignedLegacy, sid13, 'remediation'), false, 'unsigned legacy metadata must fail closed when session has active provenance ledger');
+  forgetMeshSession(sid13);
+
+  // TRIM-R2-065: in legacy mode (no ledger), explicit expectedKind must not match unrelated legacy kind
+  const legacyWake = {
+    type: 'synthetic',
+    synthetic: true,
+    metadata: { hi: { active: true } },
+  };
+  assert.equal(isTrustedMeshMessage(legacyWake, 'no-ledger-sess', 'remediation'), false, 'unrelated legacy metadata must not satisfy expectedKind="remediation"');
+  assert.equal(isTrustedMeshMessage(legacyWake, 'no-ledger-sess', 'wake'), true, 'matching legacy kind still works when no ledger exists');
+
+  // TRIM-R2-066: acquireSessionLease and RPC setInteractionLease must clamp huge ttlMs
+  const sid66 = 'mesh-r2-066';
+  const rel66 = acquireSessionLease({ sessionID: sid66, owner: 'ui', kind: 'user_interaction', ttlMs: 365 * 24 * 60 * 60 * 1000 });
+  const blk66 = getBlockingSessionLease(sid66, 'orchestration_dispatch', 'orch');
+  assert.ok(blk66, 'lease should be active');
+  assert.ok(blk66.expiresAt - blk66.acquiredAt <= 15 * 60 * 1000, `lease TTL must be capped, got ${blk66.expiresAt - blk66.acquiredAt}ms`);
+  rel66();
+  forgetMeshSession(sid66);
 });

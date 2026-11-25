@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { isAbsolute, normalize as normalizePath, posix as posixPath, relative as relativePath, resolve as resolvePath, win32 as win32Path } from 'node:path';
 import { parseOptions } from './config.ts';
-import { isExitNotice } from './diagnostics.ts';
+import { CODE, hasFailureText, isExitNotice, MAX_LINE, STACK, WARNING } from './diagnostics.ts';
 import { isProtectedCommand } from './filters.ts';
 import { compressOutput, compactListPaths, dedupToolOutput, looksStructured, stripAnsi } from './compress.ts';
-import { pruneContext, type ReduceDirective } from './prune.ts';
+import { isTrimMeshProtected, pruneContext, type ReduceDirective } from './prune.ts';
 import { setupMemory, memoryDbBytes } from './memory.ts';
 import { createTrimStats } from './stats.ts';
 import { TRIM_STATS_RPC } from './stats-rpc.ts';
@@ -78,8 +78,19 @@ export class ToolDedupeRing {
     this.rings = new Map();
     this.seq = new Map();
   }
-  check(sessionID: string, tool: string, command: string, text: string): string | null {
+  lookup(sessionID: string, tool: string, command: string, text: string): string | null {
     if (!sessionID || this.windowSize <= 0 || tool === 'read' || typeof text !== 'string' || text.length < this.minChars) return null;
+    const ring = this.rings.get(sessionID);
+    if (!ring || !ring.length) return null;
+    const hash = createHash('sha256').update(`${tool}\0${command ?? ''}\0${text}`).digest('hex').slice(0, 24);
+    const match = ring.find((e) => e.tool === tool && e.hash === hash && !e.stubbed);
+    if (!match) return null;
+    const callSeq = (this.seq.get(sessionID) ?? 0) + 1;
+    const callsBack = Math.max(1, callSeq - match.seq);
+    return `[opencode-trim: ${text.length} chars withheld — byte-identical ${tool} output from ${callsBack} call${callsBack === 1 ? '' : 's'} ago still in context (verified by content hash)]`;
+  }
+  record(sessionID: string, tool: string, command: string, text: string, stubbed: boolean = false): void {
+    if (!sessionID || this.windowSize <= 0 || tool === 'read' || typeof text !== 'string' || text.length < this.minChars) return;
     let ring = this.rings.get(sessionID);
     if (ring) {
       this.rings.delete(sessionID);
@@ -96,16 +107,14 @@ export class ToolDedupeRing {
     const callSeq = (this.seq.get(sessionID) ?? 0) + 1;
     this.seq.set(sessionID, callSeq);
     const hash = createHash('sha256').update(`${tool}\0${command ?? ''}\0${text}`).digest('hex').slice(0, 24);
-    const match = ring.find((e) => e.tool === tool && e.hash === hash && !e.stubbed);
-    if (match) {
-      const callsBack = Math.max(1, callSeq - match.seq);
-      ring.push({ seq: callSeq, tool, hash, chars: text.length, stubbed: true });
-      if (ring.length > this.windowSize) ring.splice(0, ring.length - this.windowSize);
-      return `[opencode-trim: ${text.length} chars withheld — byte-identical ${tool} output from ${callsBack} call${callsBack === 1 ? '' : 's'} ago still in context (verified by content hash)]`;
-    }
-    ring.push({ seq: callSeq, tool, hash, chars: text.length, stubbed: false });
+    ring.push({ seq: callSeq, tool, hash, chars: text.length, stubbed });
     if (ring.length > this.windowSize) ring.splice(0, ring.length - this.windowSize);
-    return null;
+  }
+  check(sessionID: string, tool: string, command: string, text: string): string | null {
+    if (!sessionID || this.windowSize <= 0 || tool === 'read' || typeof text !== 'string' || text.length < this.minChars) return null;
+    const stub = this.lookup(sessionID, tool, command, text);
+    this.record(sessionID, tool, command, text, stub !== null);
+    return stub;
   }
   reset(sessionID?: string): void {
     if (!sessionID) return;
@@ -340,6 +349,22 @@ function isEventMeshBounded(event: any): boolean {
   }
   return false;
 }
+function isEventMeshProtected(event: any, sid?: string): boolean {
+  return isTrimMeshProtected(event?.result,event,sid)||isTrimMeshProtected(event?.result?.output,event,sid);
+}
+function hasDedupeDiagnostic(text: string): boolean {
+  if(hasFailureText(text))return true;
+  let start=0,n=0;
+  while(start<=text.length){
+    if(++n>20000)return true;
+    let end=text.indexOf('\n',start);
+    if(end<0)end=text.length;
+    const line=text.slice(start,Math.min(end,start+MAX_LINE));
+    if(WARNING.test(line)||STACK.test(line)||CODE.test(line))return true;
+    start=end+1;
+  }
+  return false;
+}
 /**
  * Compress every text content part independently. Shell results carry the
  * command output in the first part and an exit/timeout notice in a later one;
@@ -359,7 +384,8 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
   }
   if(isEdit){
     if(runtime?.dedupeRing&&sid)runtime.dedupeRing.reset(sid);
-    if(options.pruneUnrelatedDiagnostics===false||!obj(event.result))return false;
+    if(!options.toolFiltering||options.pruneUnrelatedDiagnostics===false||!obj(event.result))return false;
+    if(isEventMeshProtected(event,sid))return false;
     const res=event.result;
     const pruned=pruneEditDiagnostics(event.tool,event.input,res.metadata,dir);
     if(!pruned.changed)return false;
@@ -391,24 +417,18 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
     if(typeof sink!=='function')return;
     try{sink({kind:shell?'shell':'filtering',changed:didChange,savedChars});}catch{/* observer only */}
   };
-  if(!isRead&&isEventMeshBounded(event)){report(false,0);return false;}
+  if(!isRead&&(isEventMeshBounded(event)||isEventMeshProtected(event,sid))){report(false,0);return false;}
   const content=result.content;
   const ring=runtime?.dedupeRing;
-  let firstOriginal=null,firstNext=null,changed=false,saved=0;
+  let firstOriginal: string | null=null,firstNext: string | null=null,changed=false,saved=0;
   let nextContent=content;
-  const transformPart=(text: string, noticePresent: boolean, allowDedupe: boolean): { text: string; changed: boolean } => {
+  let primaryRaw: string | null=null;
+  let primaryFinal: string | null=null;
+  let primaryNoticePresent=false;
+  const transformPart=(text: string, noticePresent: boolean): { text: string; changed: boolean } => {
     if(isRead){
       const compacted=compactReadEnvelope(text,dir);
       return {text:compacted,changed:compacted!==text};
-    }
-    if(allowDedupe&&ring&&sid&&event?.codemode!==true&&(!shell||code===undefined||code===0)){
-      const stripped=text.includes('\x1b')?stripAnsi(text):text;
-      const dedupeSafe=(!shell||!isProtectedCommand(command))&&!looksStructured(stripped)&&!stripped.includes('\u0000')&&!isExitNotice(text)&&!/\btimed out\b/i.test(text);
-      if(dedupeSafe){
-        const dedupeKey=shell?command:safeJsonLen(event.input)?JSON.stringify(event.input):'';
-        const stub=ring.check(sid,event.tool,dedupeKey,text);
-        if(stub&&stub.length<text.length)return {text:stub,changed:true};
-      }
     }
     if(shell)return compressOutput({command,text,exitCode:code,options,externalFailureNotice:noticePresent});
     const pathed=compactListPaths(text,dir,options);
@@ -418,9 +438,15 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
     return pathed.changed?{text:pathed.text,changed:true}:{text,changed:false};
   };
   if(typeof content==='string'){
+    primaryRaw=content;
     // No separate notice part exists: the failure postconditions must apply.
-    const next=transformPart(content,false,true);
-    if(next.changed&&(!shell||keepsNotice(content,next.text))){firstOriginal=content;firstNext=next.text;nextContent=next.text;changed=true;saved+=Math.max(0,content.length-next.text.length);}
+    const next=transformPart(content,false);
+    if(next.changed&&(!shell||keepsNotice(content,next.text))){
+      firstOriginal=content;firstNext=next.text;nextContent=next.text;primaryFinal=next.text;
+      changed=true;saved+=Math.max(0,content.length-next.text.length);
+    }else{
+      primaryFinal=content;
+    }
   } else if(Array.isArray(content)){
     nextContent=content.slice();
     let noticePresent=false;
@@ -428,19 +454,57 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
       const part=content[i];
       if(obj(part)&&part.type==='text'&&typeof part.text==='string'&&i>0&&EXIT_NOTICE.test(part.text))noticePresent=true;
     }
+    primaryNoticePresent=noticePresent;
     for(let i=0;i<content.length;i++){
       const part=content[i];
       if(!obj(part)||part.type!=='text'||typeof part.text!=='string')continue;
-      // Only consult dedupeRing on the primary part (i === 0) so sibling parts in one tool result never self-stub.
-      const next=transformPart(part.text,noticePresent,i===0);
-      if(!next.changed)continue;
-      if(shell&&!keepsNotice(part.text,next.text))continue;
-      if(i===0){firstOriginal=part.text;firstNext=next.text;}
+      if(i===0)primaryRaw=part.text;
+      const next=transformPart(part.text,noticePresent);
+      if(!next.changed){
+        if(i===0)primaryFinal=part.text;
+        continue;
+      }
+      if(shell&&!keepsNotice(part.text,next.text)){
+        if(i===0)primaryFinal=part.text;
+        continue;
+      }
+      if(i===0){firstOriginal=part.text;firstNext=next.text;primaryFinal=next.text;}
       nextContent[i]={...part,text:next.text};
       changed=true;saved+=Math.max(0,part.text.length-next.text.length);
     }
   }
-  if(!changed){report(false,0);return false;}
+  let dedupeSafe=false;
+  let dedupeKey='';
+  let usedDedupeStub=false;
+  if(!isRead&&ring&&sid&&event?.codemode!==true&&(!shell||code===undefined||code===0)&&!primaryNoticePresent&&primaryRaw!==null&&primaryFinal!==null){
+    const strippedRaw=primaryRaw.includes('\x1b')?stripAnsi(primaryRaw):primaryRaw;
+    const strippedFinal=primaryFinal===primaryRaw?strippedRaw:(primaryFinal.includes('\x1b')?stripAnsi(primaryFinal):primaryFinal);
+    dedupeSafe=(!shell||!isProtectedCommand(command))&&!looksStructured(strippedRaw)&&!looksStructured(strippedFinal)&&!strippedRaw.includes('\u0000')&&!strippedFinal.includes('\u0000')&&!isExitNotice(primaryRaw)&&!/\btimed out\b/i.test(primaryRaw)&&!hasDedupeDiagnostic(strippedRaw)&&!hasDedupeDiagnostic(strippedFinal);
+    if(dedupeSafe){
+      dedupeKey=shell?command:safeJsonLen(event.input)?JSON.stringify(event.input):'';
+      const stub=ring.lookup(sid,event.tool,dedupeKey,primaryFinal);
+      if(stub&&stub.length<primaryFinal.length&&(!shell||keepsNotice(primaryRaw,stub))){
+        const extraSaved=Math.max(0,primaryFinal.length-stub.length);
+        if(typeof content==='string'){
+          nextContent=stub;
+        }else if(Array.isArray(nextContent)&&obj(nextContent[0])){
+          nextContent[0]={...nextContent[0],text:stub};
+        }
+        firstOriginal=primaryRaw;
+        firstNext=stub;
+        changed=true;
+        saved+=extraSaved;
+        usedDedupeStub=true;
+      }
+    }
+  }
+  if(!changed){
+    if(dedupeSafe&&primaryFinal!==null){
+      ring.record(sid,event.tool,dedupeKey,primaryFinal,false);
+    }
+    report(false,0);
+    return false;
+  }
   const output=result.output;
   const baseMeta=obj(result.metadata)?result.metadata:{};
   const patch: Record<string, any> = {
@@ -461,6 +525,9 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
     patch.output={...output,output:firstNext};
   }
   const applied=assignResult(event,patch);
+  if(applied&&dedupeSafe&&primaryFinal!==null){
+    ring.record(sid,event.tool,dedupeKey,primaryFinal,usedDedupeStub);
+  }
   report(applied,applied?saved:0);
   return applied;
 }
@@ -483,12 +550,14 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     }catch{stats=null;}
   }
   let disposed=false;
+  let catalogRefreshGen=0;
   const modelLimits=new Map<string, any>();
   if(opts.pruning||stats){
     // Non-blocking catalog prewarm (v2.4.0+ startup): never stall plugin boot on ctx.model.list();
     // ensureModelLimit() fills any missing model lazily on the first session.context turn.
+    const prewarmGen=catalogRefreshGen;
     void discoverModelLimits(ctx).then((fresh)=>{
-      if(disposed)return;
+      if(disposed||catalogRefreshGen!==prewarmGen)return;
       for(const [k,v] of fresh)if(!modelLimits.has(k))modelLimits.set(k,v);
     }).catch(()=>{});
   }
@@ -500,25 +569,31 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   const autoCompactState=new Map<string, { inFlight: boolean; triggeredAt: number; turnsSince: number; lastMsgCount: number }>();
   const reduceQueue=new Map<string, ReduceDirective[]>();
   // Real provider token counts (same numbers the OpenCode screen shows): input + cache.read of the latest assistant step.
-  const nativeBySession=new Map<string, { id: string; tokens: number }>();
+  const nativeBySession=new Map<string, { id: string; tokens: number; modelKey?: string; overheadTokens?: number }>();
+  const lastModelBySession=new Map<string, string>();
+  const lastOverheadBySession=new Map<string, number>();
   const appliedChars=new Map<string, number>();
   const nativeSeeded=new Set<string>();
+  const modelKeyOf=(m: any): string => (obj(m)&&typeof m.providerID==='string'&&typeof m.id==='string'?`${m.providerID}/${m.id}`:'');
   const nativeTokensOf=(t: any): number | undefined=>{
     if(!obj(t))return undefined;
-    const input=typeof t.input==='number'&&Number.isFinite(t.input)?t.input:undefined;
-    if(input===undefined||input<=0)return undefined;
-    const read=obj(t.cache)&&typeof t.cache.read==='number'&&Number.isFinite(t.cache.read)?t.cache.read:0;
-    return input+Math.max(0,read);
+    const input=typeof t.input==='number'&&Number.isFinite(t.input)&&t.input>=0?t.input:undefined;
+    if(input===undefined)return undefined;
+    const read=obj(t.cache)&&typeof t.cache.read==='number'&&Number.isFinite(t.cache.read)?Math.max(0,t.cache.read):0;
+    const total=input+read;
+    return total>0?total:undefined;
   };
-  const rememberNative=(sid: string, id: unknown, tokens: unknown)=>{
+  const rememberNative=(sid: string, id: unknown, tokens: unknown, modelKey?: string)=>{
     if(obj(tokens)&&obj((tokens as any).cache)&&typeof (tokens as any).cache.read==='number'&&Number.isFinite((tokens as any).cache.read)){
       cache.observeCacheRead(sid,Math.max(0,(tokens as any).cache.read));
     }
     const total=nativeTokensOf(tokens);
     if(typeof id!=='string'||!id||total===undefined)return;
+    const mk=modelKey||lastModelBySession.get(sid)||undefined;
+    const overheadTokens=lastOverheadBySession.get(sid);
     nativeBySession.delete(sid);
     if(nativeBySession.size>=128)nativeBySession.delete(nativeBySession.keys().next().value as string);
-    nativeBySession.set(sid,{id,tokens:total});
+    nativeBySession.set(sid,{id,tokens:total,...(mk?{modelKey:mk}:{}),...(overheadTokens!==undefined?{overheadTokens}:{})});
   };
   let activeVault: any = null;
   let forgetMemorySession: ((sid: string) => void) | null = null;
@@ -553,27 +628,44 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     usableTokens:pressure.usableTokens,limitTokens:pressure.modelContext,ratio:pressure.ratio,
     source:pressure.modelSource,media:pressure.mediaPresent,breakdown:pressure.breakdown,diagnostics:pressure.diagnostics}));
   const runPruning=async(event: any, kind: string): Promise<void> => {
-    if(!opts.pruning||foreignEvent(event))return;
+    if(disposed||!opts.pruning||foreignEvent(event))return;
     try{
       await ensureModelLimit(ctx,modelLimits,event?.model,modelLookups);
+      if(disposed)return;
       const sid=sessionOf(event);
+      const curModelKey=modelKeyOf(event?.model);
       if(sid&&!nativeBySession.has(sid)&&!nativeSeeded.has(sid)&&typeof ctx?.session?.context==='function'){
         // No step.ended seen yet (e.g. plugin started inside a long session): read real tokens once.
         nativeSeeded.add(sid);
         if(nativeSeeded.size>256)nativeSeeded.delete(nativeSeeded.values().next().value as string);
         try{
           const list=await ctx.session.context({sessionID:sid});
+          if(disposed)return;
           if(Array.isArray(list)){
             for(let i=list.length-1;i>=0;i--){
               const m=list[i];
-              if(obj(m)&&m.type==='assistant'&&nativeTokensOf(m.tokens)!==undefined){rememberNative(sid,m.id,m.tokens);break;}
+              if(obj(m)&&m.type==='assistant'&&nativeTokensOf(m.tokens)!==undefined){rememberNative(sid,m.id,m.tokens,curModelKey||undefined);break;}
             }
           }
         }catch{/* best effort */}
       }
-      const nat=sid?nativeBySession.get(sid):undefined;
-      const nativeInfo=nat?{tokens:new Map([[nat.id,nat.tokens]]),baselineChars:appliedChars.get(sid as string)??0}:undefined;
+      if(disposed)return;
+      const rawNat=sid?nativeBySession.get(sid):undefined;
+      const nat=rawNat&&(!rawNat.modelKey||!curModelKey||rawNat.modelKey===curModelKey)?rawNat:undefined;
+      const nativeInfo=nat?{tokens:new Map([[nat.id,nat.tokens]]),baselineChars:appliedChars.get(sid as string)??0,...(nat.overheadTokens!==undefined?{baselineOverheadTokens:nat.overheadTokens}:{})}:undefined;
       const pressure=estimateRequest(event,modelLimits,opts,nativeInfo);
+      if(sid&&kind==='context'){
+        if(curModelKey){
+          lastModelBySession.delete(sid);
+          if(lastModelBySession.size>=128)lastModelBySession.delete(lastModelBySession.keys().next().value as string);
+          lastModelBySession.set(sid,curModelKey);
+        }
+        if(typeof pressure.overheadTokens==='number'&&Number.isFinite(pressure.overheadTokens)){
+          lastOverheadBySession.delete(sid);
+          if(lastOverheadBySession.size>=128)lastOverheadBySession.delete(lastOverheadBySession.keys().next().value as string);
+          lastOverheadBySession.set(sid,pressure.overheadTokens);
+        }
+      }
       if(sid&&typeof pressure.ratio==='number'){
         sessionPressure.delete(sid);
         if(sessionPressure.size>=128)sessionPressure.delete(sessionPressure.keys().next().value as string);
@@ -648,8 +740,9 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   };
   const statsOnlyContext=async(event: any): Promise<void> => {
     try{
-      if(foreignEvent(event))return;
+      if(disposed||foreignEvent(event))return;
       await ensureModelLimit(ctx,modelLimits,event?.model,modelLookups);
+      if(disposed)return;
       contextStats(event,estimateRequest(event,modelLimits,opts));
     }catch{/* stats are best effort */}
   };
@@ -661,7 +754,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     sessionPressure.delete(sid);
     autoCompactState.delete(sid);
     reduceQueue.delete(sid);
-    nativeBySession.delete(sid);appliedChars.delete(sid);nativeSeeded.delete(sid);
+    nativeBySession.delete(sid);lastModelBySession.delete(sid);lastOverheadBySession.delete(sid);appliedChars.delete(sid);nativeSeeded.delete(sid);
     observe((s: any)=>s.forgetSession?.(sid));
     try{forgetMemorySession?.(sid);}catch{/* ignore */}
   };
@@ -683,7 +776,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     if(opts.shell||opts.toolFiltering){
       registrations.push(valid(await ctx.tool.hook('execute.after',(event: any)=>{
         try{
-          if(foreignEvent(event))return;
+          if(disposed||foreignEvent(event))return;
           const sessionID=toolSessionOf(event);
           const effOpts=sessionID?effectiveToolOptions(opts,sessionPressure.get(sessionID)):opts;
           const rt={directory:localDir,dedupeRing,workingState,sessionID};
@@ -802,8 +895,9 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
               if(foreignEvent(e))continue;
               if(e?.type==='model.updated'||e?.type==='provider.updated'){
                 resetModelLookupAttempts(modelLookups);
+                const gen=++catalogRefreshGen;
                 void discoverModelLimits(ctx).then((fresh)=>{
-                  if(disposed)return;
+                  if(disposed||gen!==catalogRefreshGen)return;
                   if(fresh.size>0){
                     modelLimits.clear();
                     for(const [k,v] of fresh)modelLimits.set(k,v);
@@ -834,7 +928,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
                 workingState.reset(sid);
                 sessionPressure.delete(sid);
                 reduceQueue.delete(sid);
-                nativeBySession.delete(sid);appliedChars.delete(sid);
+                nativeBySession.delete(sid);lastOverheadBySession.delete(sid);appliedChars.delete(sid);
                 const cur=autoCompactState.get(sid);
                 if(cur)cur.inFlight=false;
               }
@@ -876,7 +970,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
           workingState.reset(sid);
           sessionPressure.delete(sid);
           reduceQueue.delete(sid);
-          nativeBySession.delete(sid);appliedChars.delete(sid);
+          nativeBySession.delete(sid);lastOverheadBySession.delete(sid);appliedChars.delete(sid);
           const cur=autoCompactState.get(sid);
           if(cur)cur.inFlight=false;
         },
@@ -889,9 +983,11 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   }
   return async()=>{
     if(disposed)return;
-    disposed=true;cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();reduceQueue.clear();nativeBySession.clear();appliedChars.clear();nativeSeeded.clear();modelLimits.clear();resetModelLookupAttempts(modelLookups);activeVault=null;
+    disposed=true;
+    try{subscriptionAbort?.abort();}catch{/* ignore */}
     if(memoryStop)await Promise.resolve().then(memoryStop).catch(()=>{});
     await Promise.allSettled(registrations.reverse().map(reg=>Promise.resolve().then(()=>reg.dispose())));
     await dispose();
+    cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();reduceQueue.clear();nativeBySession.clear();lastModelBySession.clear();lastOverheadBySession.clear();appliedChars.clear();nativeSeeded.clear();modelLimits.clear();resetModelLookupAttempts(modelLookups);activeVault=null;
   };
 }

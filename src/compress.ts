@@ -632,9 +632,12 @@ export function compressOutput({ command = "", text, exitCode, options, external
  * truncate distinct code/search results or structured tool payloads. */
 export function dedupToolOutput(text: any, options: any): CompressionResult {
   if (typeof text !== 'string' || text.length < options.minOutputChars ||
-    text.length > options.maxInputScanChars || looksStructured(text) || text.includes('\x00'))
+    text.length > options.maxInputScanChars)
     return {text,changed:false};
-  const result=deduplicateConsecutive(stripAnsi(text));
+  const clean = text.includes('\x1b') ? stripAnsi(text) : text;
+  if (looksStructured(clean) || clean.includes('\x00') || /[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(clean))
+    return {text,changed:false};
+  const result=deduplicateConsecutive(clean);
   if (result.length >= text.length * (1-options.minSavingsRatio)) return {text,changed:false};
   return {text:result,changed:true};
 }
@@ -645,11 +648,13 @@ export function dedupToolOutput(text: any, options: any): CompressionResult {
  */
 export function compactListPaths(text: any, directory?: string, options?: any): CompressionResult {
   if (typeof text !== 'string' || text.length < 300 ||
-    (options?.maxInputScanChars && text.length > options.maxInputScanChars) ||
-    looksStructured(text) || text.includes('\x00')) {
+    (options?.maxInputScanChars && text.length > options.maxInputScanChars)) {
     return { text: typeof text === 'string' ? text : '', changed: false };
   }
-  const clean = stripAnsi(text);
+  const clean = text.includes('\x1b') ? stripAnsi(text) : text;
+  if (looksStructured(clean) || clean.includes('\x00') || /[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(clean)) {
+    return { text, changed: false };
+  }
   const rawLines = clean.split('\n');
   if (rawLines.length < 4) return { text, changed: false };
 

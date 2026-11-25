@@ -752,13 +752,9 @@ export function isTrustedMeshMessage(
       (state.provenanceBySession.has(sessionID) ||
         (sessionID !== "global" && state.provenanceBySession.has("global")))
   );
-  const hasPresentedToken = Boolean(
-    (meshEnv && typeof meshEnv.token === "string" && meshEnv.token.length > 0) ||
-      (typeof meta?.["opencode-guardian-provenance"] === "string" &&
-        (meta["opencode-guardian-provenance"] as string).length > 0)
-  );
-  // Fail closed: if a provenance ledger exists and verification failed for a presented token, never fall back.
-  if (hasSessionLedger && hasPresentedToken) {
+  // Fail closed: once a session has an active cryptographic provenance ledger, any message
+  // that fails verifyMeshMetadata (whether forged token or unsigned legacy claim) is rejected.
+  if (hasSessionLedger) {
     return false;
   }
   const isHostSynthetic =
@@ -794,6 +790,27 @@ export function isTrustedMeshMessage(
       meta?.["opencode-hi"] === true ||
       isRecord(meta?.hi))
   ) {
+    if (expectedKind !== undefined) {
+      const allowed = Array.isArray(effectiveExpectedKind)
+        ? effectiveExpectedKind
+        : [effectiveExpectedKind];
+      const legacyGuardianKind =
+        typeof meta?.["opencode-guardian-kind"] === "string"
+          ? meta["opencode-guardian-kind"]
+          : undefined;
+      if (legacyGuardianKind && !allowed.includes(legacyGuardianKind as MeshMessageKind)) {
+        return false;
+      }
+      if (!legacyGuardianKind) {
+        const inferredKinds: MeshMessageKind[] = [];
+        if (meta?.["opencode-guardian"] === true) inferredKinds.push("remediation", "visible");
+        if (meta?.["opencode-smart-questions"] === true) inferredKinds.push("handoff", "visible");
+        if (meta?.["opencode-hi"] === true || isRecord(meta?.hi)) inferredKinds.push("wake", "delegation", "handoff");
+        if (!inferredKinds.some((k) => allowed.includes(k))) {
+          return false;
+        }
+      }
+    }
     return true;
   }
 
@@ -900,6 +917,8 @@ function pruneExpiredLeases(state: MeshGlobalState, sessionID: string, now = Dat
   return leases;
 }
 
+const MAX_LEASE_TTL_MS = 10 * 60 * 1000;
+
 export function acquireSessionLease(input: {
   sessionID: string;
   owner: string;
@@ -913,7 +932,7 @@ export function acquireSessionLease(input: {
   const now = Date.now();
   const ttl =
     typeof input.ttlMs === "number" && Number.isFinite(input.ttlMs) && input.ttlMs > 0
-      ? input.ttlMs
+      ? Math.min(MAX_LEASE_TTL_MS, Math.max(100, input.ttlMs))
       : DEFAULT_LEASE_TTL_MS[input.kind];
 
   let leases = pruneExpiredLeases(state, sID, now);
@@ -1550,8 +1569,8 @@ export async function registerMeshStateRpc(input: {
         ttlMs?: number;
         reason?: string;
       }) => {
-        const sid = typeof arg?.sessionID === "string" ? arg.sessionID : "";
-        const owner = typeof arg?.owner === "string" && arg.owner ? arg.owner : "remote";
+        const sid = typeof arg?.sessionID === "string" ? arg.sessionID.slice(0, 256) : "";
+        const owner = typeof arg?.owner === "string" && arg.owner ? arg.owner.slice(0, 128) : "remote";
         if (!sid) return { ok: false };
         const leaseKey = `${dir}::${sid}::${owner}`;
         const existing = state.remoteInteractionLeases.get(leaseKey);

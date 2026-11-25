@@ -1,5 +1,5 @@
 /** Command-aware, declarative, bounded line filters. No shell command execution. */
-import { isProtectedGit } from "./git.js";
+import { isProtectedGit, skipPrefixWords } from "./git.js";
 import { isImportantLine, isExitNotice } from "./diagnostics.js";
 const DIAGNOSTIC = /\b(?:fail(?:ed|ure)?|error|exception|fatal|panic|traceback|assertion|denied|unauthorized|warning|warn|deprecated|security|permission|vulnerab|critical|high severity|CVE-\d{4})\b|\bTS\d{4}\b|\bE\d{3,}\b|✗|❌/i;
 const SUMMARY = /(?:^\s*(?:Test Files|Test Suites:|Tests|Ran|BUILD\s+(?:SUCCESSFUL|FAILED)|Found\s+\d+\s+errors?|Checked\s+\d+\s+files?|Code style|Successfully installed|Installed\s+\d+\s+packages?|=+\s*\d+\s+(?:passed|failed)|exit\s*(?:code|status)|finished|completed|success|done)\b|\b\d+\s+(?:passed|failed|skipped|warnings?|errors?)\b)/im;
@@ -35,32 +35,51 @@ const BUILTINS = {
 const PROTECTED_INPUT = /(?:^|\s)(?:git\s+(?:diff|show|blame|apply|patch)|openssl\b|gpg\b|base64\b|ssh-keygen\b|cat\s+[^|;]+(?:\.pem|\.key|\.env)\b|\b(?:head|tail|more|less|grep|rg|cat|sed|awk|nl|bat)\b[^|;&\n]*(?:\.env(?:\.\w+)?|\.pem|\.key|\.npmrc|\.netrc|id_(?:rsa|ed25519|ecdsa|dsa)(?:_sk)?|secrets\.json)(?![\w.-]))/i;
 const DECLARATIVE = Object.freeze(['program', 'dropPrefixes', 'dropExact']);
 const KNOWN_PROGRAMS = new Set(['npm', 'pnpm', 'bun', 'cargo', 'docker', 'kubectl', 'pip', 'uv', 'gradle', 'make', 'terraform', 'curl', 'wget', 'pytest', 'vitest', 'jest', 'tsc', 'eslint', 'biome', 'go', 'git', 'ruff', 'next', 'prettier', 'playwright', 'xcodebuild', 'helm', 'ansible', 'aws', 'psql', 'deno', 'gh']);
-const PREFIX_WRAPPERS = new Set(['env', 'sudo', 'command', 'nohup', 'time', 'nice', 'timeout', 'npx', 'bunx', 'pnpx', 'uvx', 'exec', 'run']);
+const LAUNCHER_VALUE_OPTS = {
+    npx: new Set(['--package', '-p', '--call', '-c', '--node-options', '--shell', '--prefix', '--userconfig', '--cache', '--registry']),
+    pnpx: new Set(['--package', '-p', '--call', '-c']),
+    bunx: new Set(['--package', '-p']),
+    uvx: new Set(['--from', '--with', '--with-editable', '--with-requirements', '--python', '-p', '-w', '--index', '--index-url', '--directory', '--project']),
+};
 export function programOf(command) {
     if (typeof command !== 'string')
         return '';
-    // Inspect only the leading executable token (after skipping env/launcher wrappers),
+    // Inspect only the leading executable token (after skipping env/sudo/timeout/launcher wrappers),
     // never arbitrary argument tokens such as `grep npm build.log` or `echo npm install`.
-    const tokens = command.match(/(?:"[^"]*"|'[^']*'|[^\s]+)/g)?.slice(0, 24) ?? [];
-    for (let i = 0; i < tokens.length; i++) {
-        const raw = tokens[i].replace(/^['"]|['"]$/g, '');
-        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(raw))
+    const rawTokens = (command.match(/(?:"[^"]*"|'[^']*'|[^\s]+)/g)?.slice(0, 24) ?? []).map(t => t.replace(/^['"]|['"]$/g, ''));
+    for (let i = 0; i < rawTokens.length; i++) {
+        const skipped = skipPrefixWords(rawTokens, i);
+        if (skipped !== i) {
+            i = skipped - 1;
+            continue;
+        }
+        const raw = rawTokens[i];
+        if (!raw)
             continue;
         const token = (raw.replace(/\\/g, '/').split('/').at(-1) ?? '').replace(/\.(?:exe|cmd)$/i, '').toLowerCase();
         if (!token)
             continue;
         if (token === 'python' || token === 'python3' || token === 'py') {
-            if (tokens[i + 1] === '-m' && tokens[i + 2]) {
-                const mod = tokens[i + 2].replace(/^['"]|['"]$/g, '').toLowerCase();
+            if (rawTokens[i + 1] === '-m' && rawTokens[i + 2]) {
+                const mod = rawTokens[i + 2].toLowerCase();
                 return KNOWN_PROGRAMS.has(mod) ? mod : '';
             }
             return '';
         }
-        if (PREFIX_WRAPPERS.has(token)) {
-            while (i + 1 < tokens.length && tokens[i + 1].startsWith('-'))
+        const launcherOpts = LAUNCHER_VALUE_OPTS[token];
+        if (launcherOpts) {
+            while (i + 1 < rawTokens.length && rawTokens[i + 1].startsWith('-')) {
+                const opt = rawTokens[i + 1];
                 i++;
+                if (opt === '--')
+                    break;
+                if (launcherOpts.has(opt))
+                    i++;
+            }
             continue;
         }
+        if (token === 'run')
+            continue;
         return KNOWN_PROGRAMS.has(token) ? token : '';
     }
     return '';

@@ -74,7 +74,7 @@ export declare const DEFAULTS: Readonly<{
     keepRecentToolResults: 8;
     pruneAfterToolChars: 75000;
     pruneMinResultChars: 800;
-    pruneEligibleTools: string[];
+    pruneEligibleTools: readonly string[];
     pressureStartRatio: 0.65;
     pressureForceRatio: 0.85;
     pressureCriticalRatio: 0.94;
@@ -89,7 +89,7 @@ export declare const DEFAULTS: Readonly<{
     dedupeWindow: 8;
     cacheTtlMs: 300000;
     cacheMinSavingsChars: 6000;
-    filterRules: never[];
+    filterRules: readonly never[];
     memory: Readonly<{
         enabled: false;
         agentAllowlist: readonly never[];
