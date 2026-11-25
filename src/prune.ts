@@ -546,11 +546,35 @@ function messageTokensImpl(msg: any): number {
 }
 const READONLY_TOOL_SUFFIX=/^(?:[a-z][a-z0-9]{1,24}[_-])(?:read|grep|glob|ls|list|search|find|zoom|outline|inspect|view|lookup|symbols?|references|definitions?|callers|callees|imports|tree|stat)$/i;
 const LIVE_DISK_TOOLS=new Set(['read','grep','glob','ls','list','search','find']);
+const LIVE_DISK_SHELL_READERS=new Set(['ls','cat','nl','sed','head','tail','grep','egrep','fgrep','rg','find','tree','wc','stat','file','bat']);
+const LIVE_DISK_SHELL_NAV=new Set(['cd','pwd']);
 /** True for tools that inspect live files/code on disk (should be re-read live, never vaulted as stale snapshots). */
 export function isLiveDiskTool(name: unknown): boolean {
   if(typeof name!=='string'||!name)return false;
   const n=name.trim().toLowerCase();
   return LIVE_DISK_TOOLS.has(n)||READONLY_TOOL_SUFFIX.test(n);
+}
+/** True for live-disk tools OR pure file/dir-reading shell commands (`sed -n`, `cat`, `head`, `tail`, `grep`, `rg`, `wc`, `ls`, `find`, `tree`, `nl`). */
+export function isLiveDiskOutput(name: unknown, input?: any): boolean {
+  if(isLiveDiskTool(name))return true;
+  if(typeof name!=='string')return false;
+  const n=name.trim().toLowerCase();
+  if(n!=='shell'&&n!=='bash')return false;
+  const cmd=safeString(data(input,'command')).trim();
+  if(!cmd)return false;
+  const segments=splitSegments(cmd);
+  if(!segments.length||segments.length>16)return false;
+  let hasReader=false;
+  for(const rawSeg of segments){
+    const w=shellWords(rawSeg).slice(0,48);
+    const i=skipPrefixWords(w);
+    if(i>=w.length)return false;
+    const prog=gitBase(w[i]);
+    if(LIVE_DISK_SHELL_READERS.has(prog)){hasReader=true;continue;}
+    if(LIVE_DISK_SHELL_NAV.has(prog))continue;
+    return false;
+  }
+  return hasReader;
 }
 function eligibleTool(name: string, opts: any): boolean {
   if (!name || PROTECTED_NAME.test(name) || WRITE_NAME.test(name)) return false;
@@ -1071,7 +1095,7 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
   const refIds=new Map<any, string>();
   if(vault){
     for(const e of operations){
-      if(e.isErrorInput||e.isReasoning||isLiveDiskTool(e.name))continue;
+      if(e.isErrorInput||e.isReasoning||isLiveDiskOutput(e.name,e.input))continue;
       if(e.accessor.get()!==e.original)continue;
       const refId=`trm_${createHash('sha256').update(`${event?.sessionID??''}\0${e.id}\0${e.original}`).digest('hex').slice(0,32)}`;
       refIds.set(e,refId);
@@ -1087,10 +1111,10 @@ export function pruneContext(event: any, options: any, settings: any = {}): Prun
       if(e.accessor.get()!==e.original)continue;
       let replacement=e.isErrorInput?PRUNED_ERROR_INPUT:e.isReasoning?PRUNED_REASONING:PRUNED;
       if(!e.isErrorInput&&!e.isReasoning&&vault){
-        if(isLiveDiskTool(e.name)){
+        if(isLiveDiskOutput(e.name,e.input)){
           const lines=e.original.split('\n').length;
           const estTok=Math.max(1,Math.ceil(e.length/3));
-          const rawTarget=e?.input?.filePath??e?.input?.path??e?.input?.file_path??e?.input?.pattern??'';
+          const rawTarget=e?.input?.filePath??e?.input?.path??e?.input?.file_path??e?.input?.pattern??e?.input?.command??'';
           const target=typeof rawTarget==='string'?rawTarget.trim():'';
           replacement=liveDiskNotice(e.name,target||undefined,estTok,lines);
         }else{

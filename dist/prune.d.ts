@@ -62,6 +62,8 @@ export { isArr as isPlainArray };
 export declare function stableMessageKey(msg: any): string;
 /** True for tools that inspect live files/code on disk (should be re-read live, never vaulted as stale snapshots). */
 export declare function isLiveDiskTool(name: unknown): boolean;
+/** True for live-disk tools OR pure file/dir-reading shell commands (`sed -n`, `cat`, `head`, `tail`, `grep`, `rg`, `wc`, `ls`, `find`, `tree`, `nl`). */
+export declare function isLiveDiskOutput(name: unknown, input?: any): boolean;
 /** Shell commands whose output may carry instructions, secrets or patches: never pruned. */
 export declare function protectedShell(cmd: unknown): boolean;
 /** Default number of lines a read returns when no limit/endLine is given. */

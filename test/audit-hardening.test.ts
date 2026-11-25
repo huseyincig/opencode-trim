@@ -966,3 +966,54 @@ test('R2 Wave 3 — TRIM-R2-013, TRIM-R2-065 & TRIM-R2-066: fail-closed ledger w
   rel66();
   forgetMeshSession(sid66);
 });
+
+test('v0.11.5 — getVault avoids double line numbers on pre-numbered outputs, and pure file-reading shell commands bypass vault as liveDiskNotice', () => {
+  const store = openMemoryStore({ dbPath: ':memory:', project: '/proj' });
+
+  // 1. Pre-numbered output (e.g. grep -n or numbered file excerpt) must NOT get double-prefixed (`1: 140: ...`)
+  const preNumbered = [
+    '140:   const a = 1;',
+    '141:   const b = 2;',
+    '142:   return a + b;',
+  ].join('\n');
+  store.saveVault({ project: '/proj', session_id: 's1', ref_id: 'trm_prenum', tool: 'shell', target: 'grep -n', text: preNumbered });
+  const gotPre = store.getVault({ project: '/proj', ref_id: 'trm_prenum' });
+  assert.equal(gotPre.found, true);
+  assert.match(gotPre.text, /\n140:   const a = 1;/);
+  assert.doesNotMatch(gotPre.text, /\n1: 140:/, 'pre-numbered lines must not be double-numbered');
+
+  // 2. Ordinary unnumbered log output STILL gets 1-based line numbers
+  const plainLog = 'build started\ncompiling module\nbuild finished';
+  store.saveVault({ project: '/proj', session_id: 's1', ref_id: 'trm_plain', tool: 'shell', target: 'npm run build', text: plainLog });
+  const gotPlain = store.getVault({ project: '/proj', ref_id: 'trm_plain' });
+  assert.match(gotPlain.text, /\n1: build started\n2: compiling module\n3: build finished/);
+  store.close();
+
+  // 3. Pure file-reading shell commands (sed -n, cat, head, tail, grep, wc+sed) are treated as live-disk reads (NOT vaulted)
+  const storedRefs: Array<{ refId: string; cmd: string }> = [];
+  const vault = {
+    store(refId: string, entry: any) {
+      storedRefs.push({ refId, cmd: String(entry?.input?.command ?? '') });
+      return true;
+    },
+    has(refId: string) { return storedRefs.some((x) => x.refId === refId); },
+  };
+  const opts = parseOptions({ protectRecentMessages: 4, protectRecentTokens: 1024, keepRecentToolResults: 1, pruneAfterToolChars: 10000, pruneMinResultChars: 400, prunePreviewLines: 0 });
+  const big = 'line content padding\n'.repeat(100);
+  const tail = Array.from({ length: 6 }, (_, i) => ({ id: `t${i}`, role: i % 2 ? 'assistant' : 'user', content: `u${i} ` + 'z'.repeat(1200) }));
+  const msgs: any[] = [
+    { id: 'sh-sed', role: 'assistant', content: [{ type: 'tool', id: 'c-sed', tool: 'shell', input: { command: 'sed -n 140,330p src/app.ts' }, state: { status: 'completed', output: big } }] },
+    { id: 'sh-grep', role: 'assistant', content: [{ type: 'tool', id: 'c-grep', tool: 'shell', input: { command: 'cd /proj && grep -n "foo" src/app.ts | head -40' }, state: { status: 'completed', output: big } }] },
+    { id: 'sh-wc', role: 'assistant', content: [{ type: 'tool', id: 'c-wc', tool: 'shell', input: { command: 'wc -l src/app.ts; sed -n 1,80p src/app.ts' }, state: { status: 'completed', output: big } }] },
+    { id: 'sh-build', role: 'assistant', content: [{ type: 'tool', id: 'c-build', tool: 'shell', input: { command: 'npm run build' }, state: { status: 'completed', output: big } }] },
+    { id: 'sh-recent', role: 'assistant', content: [{ type: 'tool', id: 'c-rec', tool: 'shell', input: { command: 'echo recent' }, state: { status: 'completed', output: big } }] },
+    ...tail,
+  ];
+  const res = pruneContext({ sessionID: 's-live-shell', messages: msgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20_000 }, vault });
+  assert.equal(res.pruned, 4);
+  assert.deepEqual(storedRefs.map((x) => x.cmd), ['npm run build'], 'only ephemeral build shell output should be vaulted, not sed/grep/wc file reads');
+  assert.match(msgs[0].content[0].state.output, /live file\/code output.*Do not use trim_expand/);
+  assert.match(msgs[1].content[0].state.output, /live file\/code output.*Do not use trim_expand/);
+  assert.match(msgs[2].content[0].state.output, /live file\/code output.*Do not use trim_expand/);
+  assert.match(msgs[3].content[0].state.output, /RECOVERABLE, not lost.*trm_/);
+});
