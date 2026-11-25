@@ -273,6 +273,11 @@ export async function discoverModelLimits(ctx: any): Promise<Map<string, ModelLi
  */
 const MODEL_LOOKUP_ATTEMPTS = new WeakMap<Set<string>, Map<string, number>>();
 const MAX_MODEL_LOOKUP_RETRIES = 3;
+export function resetModelLookupAttempts(attempted: Set<string>): void {
+  if (!(attempted instanceof Set)) return;
+  attempted.clear();
+  MODEL_LOOKUP_ATTEMPTS.delete(attempted);
+}
 export async function ensureModelLimit(ctx: any, modelLimits: Map<string, ModelLimitEntry>, model: any, attempted: Set<string>): Promise<void> {
   if(!(modelLimits instanceof Map)||!(attempted instanceof Set)) return;
   if(typeof model?.providerID!=='string'||typeof model.id!=='string') return;

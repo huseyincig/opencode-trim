@@ -516,7 +516,8 @@ export function compressOutput({ command = "", text, exitCode, options, external
   // Avoid pathological CPU/memory use on multi-megabyte stdout floods.
   if (text.length > options.maxInputScanChars) return {text,changed:false,reason:"scan-limit"};
   if (isProtectedCommand(command)) return {text,changed:false,reason:"protected-command"};
-  if (looksStructured(text) || text.includes("\u0000") || /[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) return {text,changed:false,reason:"structured"};
+  const ansiStripped = text.includes("\x1b") ? stripAnsi(text) : text;
+  if (looksStructured(ansiStripped) || ansiStripped.includes("\u0000") || /[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(ansiStripped)) return {text,changed:false,reason:"structured"};
   const cacheKey = lruKey(command, exitCode, externalFailureNotice, options, text);
   if (cacheKey !== null) {
     const cached = compressionLru.get(cacheKey);
@@ -590,6 +591,14 @@ export function compressOutput({ command = "", text, exitCode, options, external
     const indices = diagnosticIndices(lines, cmdKind, failed, options.maxOutputLines);
     if (!indices.length) return memo({text, changed:false, reason:"no-signals"});
     candidate = renderSelection(lines, indices);
+    if (candidate.split("\n").length > options.maxOutputLines) {
+      const markerCount = Math.max(0, candidate.split("\n").length - indices.length);
+      const tighterBudget = Math.max(1, options.maxOutputLines - markerCount);
+      const tighterIndices = diagnosticIndices(lines, cmdKind, failed, tighterBudget);
+      const tighterCandidate = tighterIndices.length ? renderSelection(lines, tighterIndices) : candidate;
+      if (tighterCandidate.split("\n").length <= options.maxOutputLines) candidate = tighterCandidate;
+      else return memo({text, changed:false, reason:"cap-exceeded"});
+    }
     if (candidate.length > options.maxOutputChars) {
       // For failure, never discard diagnostics by arbitrary character truncation.
       if (failed || FAILURE.test(normalized)) return memo({text,changed:false,reason:"diagnostic-protected"});

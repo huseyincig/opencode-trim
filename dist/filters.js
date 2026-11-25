@@ -34,21 +34,34 @@ const BUILTINS = {
 };
 const PROTECTED_INPUT = /(?:^|\s)(?:git\s+(?:diff|show|blame|apply|patch)|openssl\b|gpg\b|base64\b|ssh-keygen\b|cat\s+[^|;]+(?:\.pem|\.key|\.env)\b|\b(?:head|tail|more|less|grep|rg|cat|sed|awk|nl|bat)\b[^|;&\n]*(?:\.env(?:\.\w+)?|\.pem|\.key|\.npmrc|\.netrc|id_(?:rsa|ed25519|ecdsa|dsa)(?:_sk)?|secrets\.json)(?![\w.-]))/i;
 const DECLARATIVE = Object.freeze(['program', 'dropPrefixes', 'dropExact']);
+const KNOWN_PROGRAMS = new Set(['npm', 'pnpm', 'bun', 'cargo', 'docker', 'kubectl', 'pip', 'uv', 'gradle', 'make', 'terraform', 'curl', 'wget', 'pytest', 'vitest', 'jest', 'tsc', 'eslint', 'biome', 'go', 'git', 'ruff', 'next', 'prettier', 'playwright', 'xcodebuild', 'helm', 'ansible', 'aws', 'psql', 'deno', 'gh']);
+const PREFIX_WRAPPERS = new Set(['env', 'sudo', 'command', 'nohup', 'time', 'nice', 'timeout', 'npx', 'bunx', 'pnpx', 'uvx', 'exec', 'run']);
 export function programOf(command) {
     if (typeof command !== 'string')
         return '';
-    // Inspect known executable tokens, never evaluate shell syntax or mutate command text.
+    // Inspect only the leading executable token (after skipping env/launcher wrappers),
+    // never arbitrary argument tokens such as `grep npm build.log` or `echo npm install`.
     const tokens = command.match(/(?:"[^"]*"|'[^']*'|[^\s]+)/g)?.slice(0, 24) ?? [];
     for (let i = 0; i < tokens.length; i++) {
-        const token = (tokens[i].replace(/^['"]|['"]$/g, '').replace(/\\/g, '/').split('/').at(-1) ?? '').replace(/\.(?:exe|cmd)$/i, '').toLowerCase();
-        if (token === 'python' || token === 'python3') {
-            if (tokens[i + 1] === '-m' && tokens[i + 2] === 'pytest')
-                return 'pytest';
-        }
-        if (token === 'npx' || token === 'bunx' || token === 'exec' || token === 'run')
+        const raw = tokens[i].replace(/^['"]|['"]$/g, '');
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(raw))
             continue;
-        if (['npm', 'pnpm', 'bun', 'cargo', 'docker', 'kubectl', 'pip', 'uv', 'gradle', 'make', 'terraform', 'curl', 'wget', 'pytest', 'vitest', 'jest', 'tsc', 'eslint', 'biome', 'go', 'git', 'ruff', 'next', 'prettier', 'playwright', 'xcodebuild', 'helm', 'ansible', 'aws', 'psql', 'deno', 'gh'].includes(token))
-            return token;
+        const token = (raw.replace(/\\/g, '/').split('/').at(-1) ?? '').replace(/\.(?:exe|cmd)$/i, '').toLowerCase();
+        if (!token)
+            continue;
+        if (token === 'python' || token === 'python3' || token === 'py') {
+            if (tokens[i + 1] === '-m' && tokens[i + 2]) {
+                const mod = tokens[i + 2].replace(/^['"]|['"]$/g, '').toLowerCase();
+                return KNOWN_PROGRAMS.has(mod) ? mod : '';
+            }
+            return '';
+        }
+        if (PREFIX_WRAPPERS.has(token)) {
+            while (i + 1 < tokens.length && tokens[i + 1].startsWith('-'))
+                i++;
+            continue;
+        }
+        return KNOWN_PROGRAMS.has(token) ? token : '';
     }
     return '';
 }

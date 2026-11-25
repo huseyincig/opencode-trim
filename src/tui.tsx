@@ -151,6 +151,7 @@ export default Plugin.define({
     }
     const toggle = () => setViewMode(nextViewMode(viewMode()))
     let activeSessionID: string | undefined
+    let sessionGen = 0
     let latestState: {
       snapshot: any
       nativeTokens: number | null
@@ -208,6 +209,7 @@ export default Plugin.define({
           () => props.sessionID,
           (sessionID) => {
             activeSessionID = sessionID
+            sessionGen += 1
             latestState = {
               snapshot: null,
               nativeTokens: null,
@@ -228,6 +230,8 @@ export default Plugin.define({
             if (!sessionID) return
             let seq = 0
             let disposed = false
+            let inFlight = false
+            let rerunPending = false
             let timer: ReturnType<typeof setTimeout> | undefined
             let messagesSynced = false
             let modelsSynced = false
@@ -262,101 +266,123 @@ export default Plugin.define({
 
             const fetchNow = async () => {
               if (disposed) return
-              const mine = ++seq
-              // Probe RPC first: when server tui.enabled is false, avoid unnecessary message/model sync calls.
-              let next: any
-              try {
-                next = await rpc.snapshot({ sessionID }, context.location ? { location: context.location } : undefined)
-                if (disposed || mine !== seq) return
-                setSnapshot(next ?? null)
-                latestState.snapshot = next ?? null
-                setFailed(next == null)
-                if (next != null) {
-                  setVisible(true)
-                  hiddenRetries = 0
-                  hiddenStopped = false
-                } else if (!visible()) {
-                  hiddenRetries += 1
-                  if (hiddenRetries >= MAX_HIDDEN_RETRIES) hiddenStopped = true
-                  return
-                }
-                lastNowTick = Date.now()
-                setNow(lastNowTick)
-              } catch (err) {
-                if (disposed || mine !== seq) return
-                setFailed(true)
-                lastNowTick = Date.now()
-                setNow(lastNowTick)
-                if (!visible()) {
-                  hiddenRetries += 1
-                  if (isRpcUnavailable(err) || hiddenRetries >= MAX_HIDDEN_RETRIES) hiddenStopped = true
-                  return
-                }
+              if (inFlight) {
+                rerunPending = true
+                return
               }
-
-              if (!visible()) return
-
-              const hasServerBreakdown = Boolean(next?.context?.breakdown)
+              inFlight = true
               try {
-                const messages = context.data?.session?.message
-                if (messages && typeof messages.list === "function") {
-                  let list = await Promise.resolve(messages.list(sessionID))
-                  let msgKey = messageListKey(list)
-                  const unchanged = msgKey === lastMsgKey && (hasServerBreakdown || !lastHadServerBreakdown)
-                  if (!unchanged) {
-                    let tokens = nativeContextTokens(list)
-                    if (tokens === null && !messagesSynced && typeof messages.sync === "function") {
-                      // The TUI message cache is empty until synced; sync at most once per session mount.
-                      messagesSynced = true
-                      try { await Promise.resolve(messages.sync(sessionID)) } catch {}
-                      list = await Promise.resolve(messages.list(sessionID))
-                      msgKey = messageListKey(list)
-                      tokens = nativeContextTokens(list)
+                const mine = ++seq
+                // Probe RPC first: when server tui.enabled is false, avoid unnecessary message/model sync calls.
+                let next: any
+                try {
+                  next = await rpc.snapshot({ sessionID }, context.location ? { location: context.location } : undefined)
+                  if (disposed || mine !== seq) return
+                  if (next && typeof next.sessionID === "string" && next.sessionID !== sessionID) {
+                    next = null
+                  }
+                  setSnapshot(next ?? null)
+                  latestState.snapshot = next ?? null
+                  setFailed(next == null)
+                  if (next != null) {
+                    setVisible(true)
+                    hiddenRetries = 0
+                    hiddenStopped = false
+                  } else if (!visible()) {
+                    hiddenRetries += 1
+                    if (hiddenRetries >= MAX_HIDDEN_RETRIES) hiddenStopped = true
+                    return
+                  }
+                  lastNowTick = Date.now()
+                  setNow(lastNowTick)
+                } catch (err) {
+                  if (disposed || mine !== seq) return
+                  setFailed(true)
+                  lastNowTick = Date.now()
+                  setNow(lastNowTick)
+                  if (!visible()) {
+                    hiddenRetries += 1
+                    if (isRpcUnavailable(err) || hiddenRetries >= MAX_HIDDEN_RETRIES) hiddenStopped = true
+                    return
+                  }
+                }
+
+                if (!visible()) return
+
+                const hasServerBreakdown = Boolean(next?.context?.breakdown)
+                try {
+                  const messages = context.data?.session?.message
+                  if (messages && typeof messages.list === "function") {
+                    let list = await Promise.resolve(messages.list(sessionID))
+                    let msgKey = messageListKey(list)
+                    const unchanged = msgKey === lastMsgKey && (hasServerBreakdown || !lastHadServerBreakdown)
+                    if (!unchanged) {
+                      let tokens = nativeContextTokens(list)
+                      if (tokens === null && !messagesSynced && typeof messages.sync === "function") {
+                        // The TUI message cache is empty until synced; sync at most once per session mount.
+                        messagesSynced = true
+                        try { await Promise.resolve(messages.sync(sessionID)) } catch {}
+                        list = await Promise.resolve(messages.list(sessionID))
+                        msgKey = messageListKey(list)
+                        tokens = nativeContextTokens(list)
+                      }
+                      if (!disposed && mine === seq) {
+                        const hist = compactionHistory(list)
+                        const details = compactionBreakdown(list)
+                        const breakdown = hasServerBreakdown ? null : messageBreakdown(list)
+                        lastMsgKey = msgKey
+                        lastHadServerBreakdown = hasServerBreakdown
+                        setNativeTokens(tokens)
+                        setHistory(hist)
+                        setCompDetails(details)
+                        setMsgBreakdown(breakdown)
+                        latestState.nativeTokens = tokens
+                        latestState.history = hist
+                        latestState.compDetails = details
+                        latestState.msgBreakdown = breakdown
+                      }
+                    } else if (hasServerBreakdown && !lastHadServerBreakdown && !disposed && mine === seq) {
+                      lastHadServerBreakdown = true
+                      setMsgBreakdown(null)
+                      latestState.msgBreakdown = null
                     }
-                    if (!disposed && mine === seq) {
-                      const hist = compactionHistory(list)
-                      const details = compactionBreakdown(list)
-                      const breakdown = hasServerBreakdown ? null : messageBreakdown(list)
-                      lastMsgKey = msgKey
-                      lastHadServerBreakdown = hasServerBreakdown
-                      setNativeTokens(tokens)
-                      setHistory(hist)
-                      setCompDetails(details)
-                      setMsgBreakdown(breakdown)
-                      latestState.nativeTokens = tokens
-                      latestState.history = hist
-                      latestState.compDetails = details
-                      latestState.msgBreakdown = breakdown
-                    }
-                  } else if (hasServerBreakdown && !lastHadServerBreakdown && !disposed && mine === seq) {
-                    lastHadServerBreakdown = true
+                  }
+                } catch {
+                  if (!disposed && mine === seq) {
+                    lastMsgKey = ""
+                    lastHadServerBreakdown = false
+                    setNativeTokens(null)
+                    setHistory(null)
+                    setCompDetails(null)
                     setMsgBreakdown(null)
+                    latestState.nativeTokens = null
+                    latestState.history = null
+                    latestState.compDetails = null
                     latestState.msgBreakdown = null
                   }
                 }
-              } catch {
-                if (!disposed && mine === seq) {
-                  lastMsgKey = ""
-                  lastHadServerBreakdown = false
-                  setNativeTokens(null)
-                  setHistory(null)
-                  setCompDetails(null)
-                  setMsgBreakdown(null)
-                }
-              }
 
-              try {
-                const meta = await resolveSessionMeta(sessionID)
-                if (!disposed && mine === seq) {
-                  setNativeLimit(meta.limit)
-                  setSessionCreatedAt(meta.createdAt)
-                  latestState.nativeLimit = meta.limit
-                  latestState.sessionCreatedAt = meta.createdAt
+                try {
+                  const meta = await resolveSessionMeta(sessionID)
+                  if (!disposed && mine === seq) {
+                    setNativeLimit(meta.limit)
+                    setSessionCreatedAt(meta.createdAt)
+                    latestState.nativeLimit = meta.limit
+                    latestState.sessionCreatedAt = meta.createdAt
+                  }
+                } catch {
+                  if (!disposed && mine === seq) {
+                    setNativeLimit(null)
+                    setSessionCreatedAt(null)
+                    latestState.nativeLimit = null
+                    latestState.sessionCreatedAt = null
+                  }
                 }
-              } catch {
-                if (!disposed && mine === seq) {
-                  setNativeLimit(null)
-                  setSessionCreatedAt(null)
+              } finally {
+                inFlight = false
+                if (rerunPending && !disposed) {
+                  rerunPending = false
+                  schedule()
                 }
               }
             }
@@ -596,20 +622,25 @@ export default Plugin.define({
         context.ui?.toast?.show?.({ title: "Trim", message: "Sidebar set to " + next })
         return
       }
-      let snap = latestState.snapshot
-      if (activeSessionID) {
+      const targetSessionID = activeSessionID
+      const capturedGen = sessionGen
+      const capturedState = { ...latestState }
+      let snap = capturedState.snapshot
+      if (targetSessionID) {
         try {
-          const fresh = await rpc.snapshot({ sessionID: activeSessionID }, context.location ? { location: context.location } : undefined)
-          if (fresh) snap = fresh
+          const fresh = await rpc.snapshot({ sessionID: targetSessionID }, context.location ? { location: context.location } : undefined)
+          if (fresh && (!fresh.sessionID || fresh.sessionID === targetSessionID)) snap = fresh
         } catch {}
       }
+      const sameSession = activeSessionID === targetSessionID && sessionGen === capturedGen
+      const stateForReport = sameSession ? latestState : capturedState
       const report = buildGainReport(snap, Date.now(), {
-        nativeTokens: latestState.nativeTokens,
-        nativeLimitTokens: latestState.nativeLimit,
-        sessionCreatedAt: latestState.sessionCreatedAt,
-        compactionHistory: latestState.history,
-        compactionBreakdown: latestState.compDetails,
-        messageBreakdown: latestState.msgBreakdown,
+        nativeTokens: stateForReport.nativeTokens,
+        nativeLimitTokens: stateForReport.nativeLimit,
+        sessionCreatedAt: stateForReport.sessionCreatedAt,
+        compactionHistory: stateForReport.history,
+        compactionBreakdown: stateForReport.compDetails,
+        messageBreakdown: stateForReport.msgBreakdown,
       })
       if (typeof context.ui?.dialog?.alert === "function") {
         await context.ui.dialog.alert({ title: "Trim v" + TRIM_VERSION, message: report })
@@ -651,9 +682,14 @@ export default Plugin.define({
       disposeKeymap = undefined
     }
     return () => {
-      if (typeof disposeKeymap === "function") disposeKeymap()
-      else if (disposeKeymap && typeof disposeKeymap.dispose === "function") disposeKeymap.dispose()
-      if (typeof disposeSlot === "function") disposeSlot()
+      try {
+        if (typeof disposeKeymap === "function") disposeKeymap()
+        else if (disposeKeymap && typeof disposeKeymap.dispose === "function") disposeKeymap.dispose()
+      } catch {}
+      try {
+        if (typeof disposeSlot === "function") disposeSlot()
+        else if (disposeSlot && typeof disposeSlot.dispose === "function") disposeSlot.dispose()
+      } catch {}
     }
   },
 })

@@ -269,16 +269,24 @@ export async function setupMemory(ctx, opts, hooks) {
             },
         };
         callHook(hooks?.onReady, { project, store, dbPath, vault, forgetSession });
+        const isAgentAllowed = (holder) => {
+            const agent = agentOf(holder);
+            if (agent && deny.has(agent))
+                return false;
+            if (allow.size && (!agent || !allow.has(agent)))
+                return false;
+            return true;
+        };
         // Fail-closed gate first so the tools are never exposed without it.
         regs.push(validReg(await ctx.tool.hook('execute.before', (event) => {
             if (event?.tool !== TOOL_NAME && event?.tool !== EXPAND_TOOL_NAME)
                 return;
             const ls = locationState(event, localDir);
-            if (ls !== 'local' && ls !== 'absent')
+            if (ls === 'foreign')
                 return;
-            const agent = agentOf(event);
-            // Empty allowlist = no plugin-level restriction (host permissions decide).
-            if ((agent && deny.has(agent)) || (allow.size && (!agent || !allow.has(agent))))
+            if (ls === 'ambiguous' || ls === 'conflict')
+                throw new Error(`${event.tool} is not available for ambiguous location`);
+            if (!isAgentAllowed(event))
                 throw new Error(`${event.tool} is not available to this agent`);
         })));
         regs.push(validReg(await ctx.tool.transform((editor) => {
@@ -324,6 +332,11 @@ export async function setupMemory(ctx, opts, hooks) {
                 execute: async (input, context) => {
                     if (context?.signal?.aborted)
                         throw new Error('Cancelled');
+                    const ls = locationState(context, localDir);
+                    if (ls === 'ambiguous' || ls === 'conflict' || ls === 'foreign')
+                        throw new Error(`${EXPAND_TOOL_NAME} is not available for this location`);
+                    if (!isAgentAllowed(context))
+                        throw new Error(`${EXPAND_TOOL_NAME} is not available to this agent`);
                     const id = input?.id;
                     if (id === undefined || id === null) {
                         if (input?.tool !== undefined && input?.tool !== null && (typeof input.tool !== 'string' || input.tool.length > 64)) {
@@ -434,6 +447,11 @@ export async function setupMemory(ctx, opts, hooks) {
                 execute: async (input, context) => {
                     if (context?.signal?.aborted)
                         throw new Error('Cancelled');
+                    const ls = locationState(context, localDir);
+                    if (ls === 'ambiguous' || ls === 'conflict' || ls === 'foreign')
+                        throw new Error(`${TOOL_NAME} is not available for this location`);
+                    if (!isAgentAllowed(context))
+                        throw new Error(`${TOOL_NAME} is not available to this agent`);
                     const recent = input?.recent === true;
                     const q = input?.query;
                     if (!recent) {
@@ -489,6 +507,7 @@ export async function setupMemory(ctx, opts, hooks) {
                 if (ls !== 'local' && ls !== 'absent')
                     return;
                 if (mem.recentWork === true &&
+                    isAgentAllowed(event) &&
                     Array.isArray(event?.system) &&
                     event?.kind !== 'compaction' &&
                     event?.kind !== 'title' &&
@@ -499,10 +518,13 @@ export async function setupMemory(ctx, opts, hooks) {
                         if (!isChild && typeof ctx?.session?.get === 'function') {
                             try {
                                 const info = await ctx.session.get({ sessionID: sid });
-                                if (obj(info) && (info.parentID || info.parentId))
+                                if (!obj(info) || info.parentID || info.parentId)
                                     isChild = true;
                             }
-                            catch { /* best effort; fall through */ }
+                            catch {
+                                // Fail closed: if parentID status cannot be verified, do not inject <recent_work>.
+                                isChild = true;
+                            }
                         }
                         block = isChild ? null : store.recentWork({ project, limit: 5 });
                         if (frozenRecentWork.size >= 128)

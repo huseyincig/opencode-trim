@@ -40,7 +40,9 @@ export interface PruneVaultAdapter {
 export declare const PRUNED = "[opencode-trim: old tool output omitted from model context]";
 export declare const PRUNED_ERROR_INPUT = "[opencode-trim: oversized input of failed tool call omitted; error output preserved]";
 export declare const PRUNED_REASONING = "[opencode-trim: historical reasoning trace omitted]";
-export declare function recoverableNotice(refId: string, tool?: string, tokens?: number, lines?: number): string;
+export declare function recoverableNotice(refId: string, tool?: string, tokens?: number, lines?: number, opts?: {
+    truncated?: boolean;
+}): string;
 export declare function liveDiskNotice(tool?: string, target?: string, tokens?: number, lines?: number): string;
 export declare function expiredNotice(refId: string, tool?: string): string;
 export declare function buildPreviewNotice(original: string, notice: string, previewLines?: number): string;

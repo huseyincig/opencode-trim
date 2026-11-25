@@ -278,6 +278,12 @@ export async function discoverModelLimits(ctx) {
  */
 const MODEL_LOOKUP_ATTEMPTS = new WeakMap();
 const MAX_MODEL_LOOKUP_RETRIES = 3;
+export function resetModelLookupAttempts(attempted) {
+    if (!(attempted instanceof Set))
+        return;
+    attempted.clear();
+    MODEL_LOOKUP_ATTEMPTS.delete(attempted);
+}
 export async function ensureModelLimit(ctx, modelLimits, model, attempted) {
     if (!(modelLimits instanceof Map) || !(attempted instanceof Set))
         return;

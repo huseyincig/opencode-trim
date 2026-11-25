@@ -54,4 +54,5 @@ export declare function sumPrunedMsgChars(messages: unknown): number;
 export declare function estimateRequest(event: any, modelLimits: Map<string, ModelLimitEntry>, options: any, native?: NativeTokenInfo): PressureEstimate;
 /** Prewarm host-provided limits once. Not a provider generation request. */
 export declare function discoverModelLimits(ctx: any): Promise<Map<string, ModelLimitEntry>>;
+export declare function resetModelLookupAttempts(attempted: Set<string>): void;
 export declare function ensureModelLimit(ctx: any, modelLimits: Map<string, ModelLimitEntry>, model: any, attempted: Set<string>): Promise<void>;

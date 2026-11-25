@@ -142,7 +142,7 @@ export function canonicalMeshDirectory(directory) {
         }
     }
 }
-function setBoundedMap(map, key, value, max = MAX_BOUNDED_SESSIONS) {
+function setBoundedMap(map, key, value, max = MAX_BOUNDED_SESSIONS, onEvict) {
     if (map.has(key))
         map.delete(key);
     map.set(key, value);
@@ -150,7 +150,14 @@ function setBoundedMap(map, key, value, max = MAX_BOUNDED_SESSIONS) {
         const oldest = map.keys().next().value;
         if (oldest === undefined)
             break;
+        const evicted = map.get(oldest);
         map.delete(oldest);
+        if (onEvict && evicted !== undefined) {
+            try {
+                onEvict(evicted, oldest);
+            }
+            catch { }
+        }
     }
 }
 function getMeshState() {
@@ -324,6 +331,11 @@ export function getMeshPeers(options) {
 export function hasMeshCapability(capability, directory) {
     if (getMeshPeers({ directory, capability }).length > 0)
         return true;
+    const targetDir = directory ? canonicalMeshDirectory(directory) : undefined;
+    // Do not let unscoped legacy global flags leak a directory-scoped v2 peer into another project.
+    if (targetDir && targetDir !== "*" && getMeshPeers({ capability }).length > 0) {
+        return false;
+    }
     const g = globalThis;
     if (capability === "policy.gate" && g[LEGACY_COORDINATION_SYMBOL]?.guardian)
         return true;
@@ -500,6 +512,17 @@ export function isTrustedMeshMessage(value, sessionID, expectedKind) {
             return false;
         }
         return true;
+    }
+    const state = getMeshState();
+    const hasSessionLedger = Boolean(sessionID &&
+        (state.provenanceBySession.has(sessionID) ||
+            (sessionID !== "global" && state.provenanceBySession.has("global"))));
+    const hasPresentedToken = Boolean((meshEnv && typeof meshEnv.token === "string" && meshEnv.token.length > 0) ||
+        (typeof meta?.["opencode-guardian-provenance"] === "string" &&
+            meta["opencode-guardian-provenance"].length > 0));
+    // Fail closed: if a provenance ledger exists and verification failed for a presented token, never fall back.
+    if (hasSessionLedger && hasPresentedToken) {
+        return false;
     }
     const isHostSynthetic = value.type === "synthetic" ||
         value.synthetic === true ||
@@ -953,17 +976,20 @@ export function registerRoleProfileResolver(input) {
     const state = getMeshState();
     const dir = canonicalMeshDirectory(input.directory);
     const key = `${dir}::${input.owner}`;
-    state.roleResolversByKey.set(key, {
+    const entry = {
         owner: input.owner,
         directory: dir,
         resolve: input.resolve,
-    });
+    };
+    state.roleResolversByKey.set(key, entry);
     let disposed = false;
     return () => {
         if (disposed)
             return;
         disposed = true;
-        state.roleResolversByKey.delete(key);
+        if (state.roleResolversByKey.get(key) === entry) {
+            state.roleResolversByKey.delete(key);
+        }
     };
 }
 export async function resolveMeshAgentProfile(sessionID, directory) {
@@ -1020,13 +1046,16 @@ export function registerSkillCatalogProvider(provider) {
     const state = getMeshState();
     const dir = canonicalMeshDirectory(provider.directory);
     const key = `${dir}::${provider.owner}`;
-    state.skillProvidersByKey.set(key, { ...provider, directory: dir });
+    const entry = { ...provider, directory: dir };
+    state.skillProvidersByKey.set(key, entry);
     let disposed = false;
     return () => {
         if (disposed)
             return;
         disposed = true;
-        state.skillProvidersByKey.delete(key);
+        if (state.skillProvidersByKey.get(key) === entry) {
+            state.skillProvidersByKey.delete(key);
+        }
     };
 }
 export async function queryMeshSkills(query, options) {
@@ -1073,20 +1102,29 @@ export async function callMeshRpc(input) {
         return undefined;
     const timeoutMs = input.timeoutMs ?? 1200;
     let timer;
+    const controller = new AbortController();
+    const onExternalAbort = () => controller.abort();
+    if (input.signal) {
+        if (input.signal.aborted)
+            controller.abort();
+        else
+            input.signal.addEventListener("abort", onExternalAbort, { once: true });
+    }
     try {
         const client = input.rpcGetter(input.contract);
         const fn = client?.[input.method];
         if (typeof fn !== "function")
             return undefined;
-        const callOptions = {};
+        const callOptions = { signal: controller.signal };
         if (input.directory)
             callOptions.location = { directory: input.directory };
-        if (input.signal)
-            callOptions.signal = input.signal;
         const result = await Promise.race([
             Promise.resolve().then(() => fn(input.payload, callOptions)),
             new Promise((resolve) => {
-                timer = setTimeout(() => resolve(undefined), timeoutMs);
+                timer = setTimeout(() => {
+                    controller.abort();
+                    resolve(undefined);
+                }, timeoutMs);
             }),
         ]);
         return result;
@@ -1098,6 +1136,8 @@ export async function callMeshRpc(input) {
     finally {
         if (timer !== undefined)
             clearTimeout(timer);
+        if (input.signal)
+            input.signal.removeEventListener("abort", onExternalAbort);
     }
 }
 export async function registerMeshStateRpc(input) {
@@ -1194,14 +1234,42 @@ export async function registerMeshStateRpc(input) {
                         ttlMs: arg.ttlMs,
                         reason: arg.reason,
                     });
-                    setBoundedMap(state.remoteInteractionLeases, leaseKey, release, MAX_BOUNDED_SESSIONS);
+                    setBoundedMap(state.remoteInteractionLeases, leaseKey, release, MAX_BOUNDED_SESSIONS, (evictedRelease) => {
+                        try {
+                            evictedRelease();
+                        }
+                        catch { }
+                    });
                 }
                 return { ok: true };
             },
         });
     }
     catch {
-        state.rpcHostsByDir.delete(dir);
+        if (state.rpcHostsByDir.get(dir) === hostEntry) {
+            state.rpcHostsByDir.delete(dir);
+        }
+        const queue = standbysByDir.get(dir);
+        while (queue && queue.length > 0 && !state.rpcHostsByDir.has(dir)) {
+            const next = queue.shift();
+            if (!next || next.disposed)
+                continue;
+            if (queue.length === 0)
+                standbysByDir.delete(dir);
+            next.activeDispose = await registerMeshStateRpc({
+                rpcRegister: next.rpcRegister,
+                owner: next.owner,
+                directory: input.directory,
+            });
+            if (next.disposed && next.activeDispose) {
+                const fn = next.activeDispose;
+                next.activeDispose = undefined;
+                await fn();
+            }
+            else if (state.rpcHostsByDir.has(dir)) {
+                break;
+            }
+        }
         return async () => { };
     }
     let disposed = false;

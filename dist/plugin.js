@@ -3,13 +3,14 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, normalize as normalizePath, posix as posixPath, relative as relativePath, resolve as resolvePath, win32 as win32Path } from 'node:path';
 import { parseOptions } from "./config.js";
 import { isExitNotice } from "./diagnostics.js";
-import { compressOutput, compactListPaths, dedupToolOutput } from "./compress.js";
+import { isProtectedCommand } from "./filters.js";
+import { compressOutput, compactListPaths, dedupToolOutput, looksStructured, stripAnsi } from "./compress.js";
 import { pruneContext } from "./prune.js";
 import { setupMemory, memoryDbBytes } from "./memory.js";
 import { createTrimStats } from "./stats.js";
 import { TRIM_STATS_RPC } from "./stats-rpc.js";
 import { ContextCache } from "./cache.js";
-import { discoverModelLimits, ensureModelLimit, estimateRequest, sumPrunedMsgChars } from "./pressure.js";
+import { discoverModelLimits, ensureModelLimit, estimateRequest, resetModelLookupAttempts, sumPrunedMsgChars } from "./pressure.js";
 import { registerMeshPeer, wasMeshBounded, forgetMeshSession, MESH_METADATA_KEY } from "./bridge.js";
 const SHELL_TOOLS = new Set(['shell', 'bash']);
 const LIST_TOOLS = new Set(['grep', 'glob', 'ls', 'list', 'find']);
@@ -66,8 +67,11 @@ export class ToolDedupeRing {
         }
         else {
             ring = [];
-            if (this.rings.size >= MAX_RING_SESSIONS)
-                this.rings.delete(this.rings.keys().next().value);
+            if (this.rings.size >= MAX_RING_SESSIONS) {
+                const oldest = this.rings.keys().next().value;
+                this.rings.delete(oldest);
+                this.seq.delete(oldest);
+            }
             this.rings.set(sessionID, ring);
         }
         const callSeq = (this.seq.get(sessionID) ?? 0) + 1;
@@ -437,16 +441,20 @@ export function processToolEvent(event, options, sink, runtime) {
     const ring = runtime?.dedupeRing;
     let firstOriginal = null, firstNext = null, changed = false, saved = 0;
     let nextContent = content;
-    const transformPart = (text, noticePresent) => {
+    const transformPart = (text, noticePresent, allowDedupe) => {
         if (isRead) {
             const compacted = compactReadEnvelope(text, dir);
             return { text: compacted, changed: compacted !== text };
         }
-        if (ring && sid && event?.codemode !== true && (!shell || code === undefined || code === 0)) {
-            const dedupeKey = shell ? command : safeJsonLen(event.input) ? JSON.stringify(event.input) : '';
-            const stub = ring.check(sid, event.tool, dedupeKey, text);
-            if (stub && stub.length < text.length)
-                return { text: stub, changed: true };
+        if (allowDedupe && ring && sid && event?.codemode !== true && (!shell || code === undefined || code === 0)) {
+            const stripped = text.includes('\x1b') ? stripAnsi(text) : text;
+            const dedupeSafe = (!shell || !isProtectedCommand(command)) && !looksStructured(stripped) && !stripped.includes('\u0000') && !isExitNotice(text) && !/\btimed out\b/i.test(text);
+            if (dedupeSafe) {
+                const dedupeKey = shell ? command : safeJsonLen(event.input) ? JSON.stringify(event.input) : '';
+                const stub = ring.check(sid, event.tool, dedupeKey, text);
+                if (stub && stub.length < text.length)
+                    return { text: stub, changed: true };
+            }
         }
         if (shell)
             return compressOutput({ command, text, exitCode: code, options, externalFailureNotice: noticePresent });
@@ -459,7 +467,7 @@ export function processToolEvent(event, options, sink, runtime) {
     };
     if (typeof content === 'string') {
         // No separate notice part exists: the failure postconditions must apply.
-        const next = transformPart(content, false);
+        const next = transformPart(content, false, true);
         if (next.changed && (!shell || keepsNotice(content, next.text))) {
             firstOriginal = content;
             firstNext = next.text;
@@ -480,8 +488,11 @@ export function processToolEvent(event, options, sink, runtime) {
             const part = content[i];
             if (!obj(part) || part.type !== 'text' || typeof part.text !== 'string')
                 continue;
-            const next = transformPart(part.text, noticePresent);
+            // Only consult dedupeRing on the primary part (i === 0) so sibling parts in one tool result never self-stub.
+            const next = transformPart(part.text, noticePresent, i === 0);
             if (!next.changed)
+                continue;
+            if (shell && !keepsNotice(part.text, next.text))
                 continue;
             if (i === 0) {
                 firstOriginal = part.text;
@@ -682,6 +693,8 @@ export async function setupTrim(ctx) {
             const result = pruneContext(event, opts, { pressure, ...effectiveGate, directory: localDir, ...(pendingDirectives?.length ? { reduceDirectives: pendingDirectives } : {}), ...(activeVault ? { vault: activeVault } : {}) });
             if (sid && result.consumedDirectives)
                 reduceQueue.delete(sid);
+            if (sid && result.pruned > 0)
+                dedupeRing.reset(sid);
             gate.finish(result.plannedIds, { deferred: result.warmCacheDeferred === true });
             const postPressure = (kind === 'context' && result.pruned > 0) ? estimateRequest(event, modelLimits, opts, nativeInfo) : pressure;
             if (sid && kind === 'context') {
@@ -907,7 +920,7 @@ export async function setupTrim(ctx) {
         }
     }
     catch (error) {
-        await Promise.allSettled(registrations.reverse().map(reg => reg.dispose()));
+        await Promise.allSettled(registrations.reverse().map(reg => Promise.resolve().then(() => reg.dispose())));
         await dispose();
         cache.clear();
         throw error;
@@ -940,12 +953,15 @@ export async function setupTrim(ctx) {
                             if (foreignEvent(e))
                                 continue;
                             if (e?.type === 'model.updated' || e?.type === 'provider.updated') {
-                                modelLookups.clear();
+                                resetModelLookupAttempts(modelLookups);
                                 void discoverModelLimits(ctx).then((fresh) => {
                                     if (disposed)
                                         return;
-                                    for (const [k, v] of fresh)
-                                        modelLimits.set(k, v);
+                                    if (fresh.size > 0) {
+                                        modelLimits.clear();
+                                        for (const [k, v] of fresh)
+                                            modelLimits.set(k, v);
+                                    }
                                 }).catch(() => { });
                                 continue;
                             }
@@ -1059,11 +1075,11 @@ export async function setupTrim(ctx) {
         appliedChars.clear();
         nativeSeeded.clear();
         modelLimits.clear();
-        modelLookups.clear();
+        resetModelLookupAttempts(modelLookups);
         activeVault = null;
         if (memoryStop)
             await Promise.resolve().then(memoryStop).catch(() => { });
-        await Promise.allSettled(registrations.reverse().map(reg => reg.dispose()));
+        await Promise.allSettled(registrations.reverse().map(reg => Promise.resolve().then(() => reg.dispose())));
         await dispose();
     };
 }
