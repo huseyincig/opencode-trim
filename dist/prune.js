@@ -222,7 +222,7 @@ export function scorePruningRelevance(entry, activeTerms) {
 /** Hard per-message / per-request content-part budgets. Over budget fails closed (no pruning). */
 export const MAX_PARTS_PER_MESSAGE = 500;
 export const MAX_PARTS_TOTAL = 50000;
-const PROTECTED_NAME = /(?:^hi_|^lazy_skill|^trim_|skill_(?:load|search|info|unload|status)|question|ask|task|delegate|work|board|todo|permission|auth|security|guardian|recovery|session|codebase|memory|mcp|approve|credential|secret|payment|deploy)/i;
+const PROTECTED_NAME = /(?:^hi_|^lazy_skill|^trim_|skill_(?:load|search|info|unload|status)|subagent|(?:^|[_-])(?:agent|spawn)(?:$|[_-])|question|ask|task|delegate|work|board|todo|permission|auth|security|guardian|recovery|session|codebase|memory|mcp|approve|credential|secret|payment|deploy)/i;
 const WRITE_NAME = /(?:write|edit|patch|delete|remove|apply|create|commit|push|upload|post|send|update|exec)/i;
 // Line-shaped diagnostics: a line must *look like* a log/failure/summary line.
 // An incidental token (`throw new Error(..)`, `catch (error)`) in source does not count.
@@ -270,7 +270,7 @@ const STATUS_KEYWORD = /timed out|killed|interrupted|cancell?ed|terminated|timeo
 function statusNotice(text) { return STATUS_KEYWORD.test(text) && eachLine(text, (l) => l.length < 240 && STATUS_NOTICE.test(l)); }
 /** Own-data reader that never invokes accessors or traps. */
 const INSTRUCTION_PATH = /(?:^|[/\\])(?:AGENTS|PROTOCOL|CLAUDE|GEMINI|SECURITY|POLICY|INSTRUCTIONS|CONTRIBUTING|README|SKILL)\.md$|(?:^|[/\\])(?:opencode|plugin|secrets)\.jsonc?$|(?:^|[/\\])(?:\.npmrc|\.netrc|id_(?:rsa|ed25519|ecdsa|dsa)(?:_sk)?)$|(?:^|[/\\])\.env(?:\.[^/\\]+)?$/i;
-const SAFE_SHELL = /^\s*(?:(?:cd|ls|pwd|echo|cat|nl|sed|seq|date|grep|rg|find|head|tail|wc|tree|stat|file|which|uname|sqlite3\s+-readonly|node\s+(?:--(?:import|loader|conditions|no-warnings|experimental-\S+)\s+\S+\s+)*--test|git\s+(?:(?:-C|--git-dir|--work-tree)\s+\S+\s+)*(?:--no-pager\s+)*(?:status|log|branch|diff\s+--stat)|npm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|pnpm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|bun\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|cargo\s+(?:test|check|build|clippy)|pytest|vitest|jest|tsc|eslint|biome|[a-z][a-z0-9_-]{1,31}\s+(?:validate|status|list|show|view|info|doctor|--version|--help))\b)/i;
+const SAFE_SHELL = /^\s*(?:(?:cd|ls|pwd|echo|cat|nl|sed|seq|date|grep|rg|find|head|tail|wc|tree|stat|file|which|uname|sqlite3\s+-readonly|node\s+(?:--(?:import|loader|conditions|no-warnings|experimental-\S+)\s+\S+\s+)*--test|git\s+(?:(?:-C|--git-dir|--work-tree)\s+\S+\s+)*(?:--no-pager\s+)*(?:status|log|branch|ls-files|ls-tree|rev-parse|describe|merge-base|diff\s+--stat)|npm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|pnpm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|bun\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|cargo\s+(?:test|check|build|clippy)|pytest|vitest|jest|tsc|eslint|biome|[a-z][a-z0-9_-]{1,31}\s+(?:validate|status|list|show|view|info|doctor|--version|--help))\b)/i;
 const MUTATING_JS_API = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rmSync|rmdir(?:Sync)?|unlink(?:Sync)?|rename(?:Sync)?|copyFile(?:Sync)?|cpSync|mkdir(?:Sync)?|chmod(?:Sync)?|chown(?:Sync)?|truncate(?:Sync)?|createWriteStream|child_process|exec(?:Sync|File|FileSync)?|spawn(?:Sync)?|fork|fetch)\b/;
 function isReadOnlyInlineEval(seg) {
     const trimmed = seg.trim();
@@ -373,10 +373,10 @@ export function stableMessageKey(msg) {
                 continue;
             const ptype = data(part, 'type');
             feed(typeof ptype === 'string' ? ptype : '');
-            const pid = data(part, 'id') ?? data(part, 'callID');
+            const pid = data(part, 'id') ?? data(part, 'callID') ?? data(part, 'toolCallId');
             if (typeof pid === 'string')
                 feed(pid);
-            const pname = data(part, 'name') ?? data(part, 'tool');
+            const pname = data(part, 'name') ?? data(part, 'toolName') ?? data(part, 'tool');
             if (typeof pname === 'string')
                 feed(pname);
             if (ptype === 'text') {
@@ -805,6 +805,7 @@ function messageTokensImpl(msg) {
     return tokens;
 }
 const READONLY_TOOL_SUFFIX = /^(?:[a-z][a-z0-9]{1,24}[_-])(?:read|grep|glob|ls|list|search|find|zoom|outline|inspect|view|lookup|symbols?|references|definitions?|callers|callees|imports|tree|stat)$/i;
+const READONLY_EPHEMERAL_SUFFIX = /^(?:[a-z][a-z0-9]{1,24}[_-])(?:status|watch|logs?|poll|check)$/i;
 const LIVE_DISK_TOOLS = new Set(['read', 'grep', 'glob', 'ls', 'list', 'search', 'find']);
 const LIVE_DISK_SHELL_READERS = new Set(['ls', 'cat', 'nl', 'sed', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'find', 'tree', 'wc', 'stat', 'file', 'bat']);
 const LIVE_DISK_SHELL_NAV = new Set(['cd', 'pwd']);
@@ -850,7 +851,7 @@ export function isLiveDiskOutput(name, input) {
 function eligibleTool(name, opts) {
     if (!name || PROTECTED_NAME.test(name) || WRITE_NAME.test(name))
         return false;
-    return opts.pruneEligibleTools.includes(name) || READONLY_TOOL_SUFFIX.test(name);
+    return opts.pruneEligibleTools.includes(name) || READONLY_TOOL_SUFFIX.test(name) || READONLY_EPHEMERAL_SUFFIX.test(name);
 }
 const GIT_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--super-prefix', '--config-env', '--attr-source']);
 const PATCH_FLAG = /^(?:--(?:patch|patch-with-stat|patch-with-raw|cc|remerge-diff|diff-merges|word-diff|color-words|full-diff|unified|textconv|ext-diff)(?:=|$)|-(?:[A-Za-z0-9]*[pucm]|L|U\d*)(?:\W|\w|$))/;
@@ -1277,7 +1278,7 @@ function verificationKey(input) {
 }
 const ERROR_INPUT_SKIP = new Set(['path', 'filePath', 'file_path', 'directory', 'id', 'tool', 'name', 'workdir', 'cwd']);
 const WRITE_INPUT_FIELDS = new Set(['content', 'newString', 'oldString', 'patch', 'patchText', 'new_str', 'old_str', 'text', 'code', 'body']);
-const OLD_INPUT_SKIP = new Set([...ERROR_INPUT_SKIP, 'command', 'url', 'pattern', 'role', 'agent', 'title', 'status', 'mode', 'type', 'scope', 'target', 'taskId', 'sessionId', 'sessionID', 'refId']);
+const OLD_INPUT_SKIP = new Set([...ERROR_INPUT_SKIP, 'command', 'url', 'pattern', 'role', 'agent', 'title', 'status', 'mode', 'type', 'scope', 'target', 'taskId', 'sessionId', 'sessionID', 'refId', 'prompt', 'message', 'messages', 'instruction', 'instructions', 'description', 'query', 'summary', 'evidence', 'text', 'system']);
 const SENSITIVE_INPUT_TOOL = /(?:permission|auth|security|guardian|recovery|credential|secret|payment|deploy|approve)/i;
 const SUPERSEDED_WRITE_MIN_CHARS = 400;
 const OLD_INPUT_MIN_CHARS = 1000;
@@ -1305,7 +1306,7 @@ function collectErrorInputCandidates(call, resultMi, callId, name, opts, out, mi
     }
 }
 function collectOldToolInputCandidates(call, resultMi, callId, name, opts, out) {
-    if (opts.pruneOldToolInputs === false || !call || FILE_WRITE_TOOL.test(name) || WRITE_NAME.test(name) || SENSITIVE_INPUT_TOOL.test(name))
+    if (opts.pruneOldToolInputs !== true || !call || PROTECTED_NAME.test(name) || FILE_WRITE_TOOL.test(name) || WRITE_NAME.test(name) || SENSITIVE_INPUT_TOOL.test(name))
         return;
     if (msgHasSignedReasoning(call.msg))
         return;
@@ -1484,7 +1485,7 @@ function candidates(event, opts, baseDir, ctx) {
                         for (const wp of wPaths) {
                             fileWrites.push({ mi, pi, path: wp, scope });
                         }
-                        if (opts.supersedeWrites !== false && wPaths.length > 0 && !touchesInstructionTarget(wInput)) {
+                        if (opts.supersedeWrites !== false && wPaths.length > 0 && !PROTECTED_NAME.test(name) && !touchesInstructionTarget(wInput)) {
                             const wCall = call ?? (type === 'tool' ? { name, input: wInput, mi, pi, msgId, part, msg } : null);
                             if (wCall && !msgHasSignedReasoning(wCall.msg))
                                 writeCalls.push({ call: wCall, resultMi: mi, resultPi: pi, callId, name, paths: wPaths, scope });
@@ -1753,6 +1754,7 @@ export function pruneContext(event, options, settings = {}) {
     const effPreviewLines = adaptive && adaptiveCritical ? 0 : adaptive && adaptiveForce ? Math.min(options.prunePreviewLines, 1) : options.prunePreviewLines;
     const agedDiffCutoff = Math.max(0, event.messages.length - Math.max(8, options.protectRecentMessages * 2));
     const plannedDrops = settings.plannedDrops instanceof Set ? settings.plannedDrops : new Set();
+    const hydratedDrops = settings.hydratedDrops instanceof Set ? settings.hydratedDrops : null;
     const { entries, fileWrites, pairedReadOnly } = candidates(event, options, baseDir, {
         effMinResultChars,
         effMinReasoningChars,
@@ -1788,7 +1790,8 @@ export function pruneContext(event, options, settings = {}) {
     const newDrops = settings.allowNewDrops !== false;
     const forceFlush = settings.forceFlush === true;
     const dueToSize = total > options.pruneAfterToolChars * 1.25;
-    const dueToPressure = (normalizedRatio >= options.pressureStartRatio && !settings.pressure?.mediaPresent) || forceFlush;
+    const hasRealTokens = typeof settings.pressure?.reportedTokens === 'number' && Number.isFinite(settings.pressure.reportedTokens);
+    const dueToPressure = (normalizedRatio >= options.pressureStartRatio && (!settings.pressure?.mediaPresent || hasRealTokens)) || forceFlush;
     // Supersession needs coverage evidence, not merely a similar path or command.
     const groups = new Map();
     for (const e of resultEntries) {
@@ -1962,6 +1965,7 @@ export function pruneContext(event, options, settings = {}) {
         }
     }
     let removedChars = 0;
+    let replayedChars = 0;
     const committed = [];
     try {
         for (const e of operations) {
@@ -2026,6 +2030,8 @@ export function pruneContext(event, options, settings = {}) {
             e.accessor.set(replacement);
             committed.push(e);
             removedChars += delta;
+            if (hydratedDrops && hydratedDrops.has(e.id))
+                replayedChars += delta;
             recordPrunedMsgChars(at(event.messages, e.mi), delta);
         }
     }
@@ -2048,7 +2054,7 @@ export function pruneContext(event, options, settings = {}) {
     const totalPruned = committed.length + spanRes.collapsed;
     const reason = totalPruned ? 'pruned' : (!newDrops || warmCacheDeferred) ? 'cache-deferred' :
         !(dueToSize || dueToPressure || dueToSupersession || errorInputs.length > 0 || supersededWrites.length > 0 || resolvedErrors.length > 0 || reasoningEntries.length > 0 || hasDirectiveTargets) ? 'below-pressure' : 'no-safe-target';
-    return { pruned: totalPruned, removedChars, reason, plannedIds: [...committed.map(e => e.id), ...spanRes.ids],
+    return { pruned: totalPruned, removedChars, replayedChars, reason, plannedIds: [...committed.map(e => e.id), ...spanRes.ids],
         eligibleChars: total, estimatedContextRatio: settings.pressure?.ratio,
         consumedDirectives: directives.length > 0 && newDrops,
         warmCacheDeferred };

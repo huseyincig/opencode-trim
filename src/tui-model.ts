@@ -171,7 +171,7 @@ function totalSaved(snap: any): number | null {
   return any ? sum : null
 }
 
-export const TRIM_VERSION = "0.12.2"
+export const TRIM_VERSION = "0.12.3"
 
 export const SECTION_TITLES: Record<string, string> = { context: "Context", optimization: "Optimization", compaction: "Compaction", memory: "Memory" }
 
@@ -397,8 +397,10 @@ export function nextViewMode(mode: TrimViewMode): TrimViewMode {
 
 // Host-side fallback breakdown from loaded session messages (after the last completed compaction).
 const MEASURE_SKIP_KEYS = new Set([
-  "type", "role", "status", "id", "sessionID", "messageID", "callID", "time", "tokens", "signature", "toolCallId", "toolName",
+  "type", "role", "status", "id", "sessionID", "messageID", "callID", "time", "tokens", "signature", "toolCallId", "toolName", "uri", "base64", "blob", "bytes",
 ])
+const MEASURE_MEDIA_TYPES = new Set(["media", "image", "file"])
+const MEASURE_DATA_URI = /^data:[^;,\s]{1,80};base64,/i
 
 export function messageBreakdown(messages: unknown): SidebarBreakdown | null {
   if (!Array.isArray(messages) || !messages.length) return null
@@ -414,7 +416,7 @@ export function messageBreakdown(messages: unknown): SidebarBreakdown | null {
   const seen = new WeakSet<object>()
   const measure = (v: unknown, depth: number = 0): number => {
     if (v == null || budget <= 0) return 0
-    if (typeof v === "string") return v.length
+    if (typeof v === "string") return MEASURE_DATA_URI.test(v.slice(0, 128)) ? 0 : v.length
     if (typeof v !== "object" || depth > 4) return 0
     if (seen.has(v)) return 0
     seen.add(v)
@@ -427,9 +429,12 @@ export function messageBreakdown(messages: unknown): SidebarBreakdown | null {
       return total
     }
     const rec = v as Record<string, unknown>
+    const rt = typeof rec.type === "string" ? rec.type.toLowerCase() : ""
+    if (MEASURE_MEDIA_TYPES.has(rt)) return 0
     for (const k in rec) {
       if (budget <= 0) break
       if (MEASURE_SKIP_KEYS.has(k) || !Object.prototype.hasOwnProperty.call(rec, k)) continue
+      if (k === "data" && typeof rec[k] === "string" && (rec[k] as string).length >= 256) continue
       total += measure(rec[k], depth + 1)
     }
     return total

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.3 — 2026-11-25
+
+- **Critical Fix: Media-Aware Base64 Token & Breakdown Estimation (`src/pressure.ts`, `src/tui-model.ts`, `src/memory.ts`, `src/plugin.ts`)**:
+  - **Root Cause:** `estimateRequest()` serialized entire content parts via `JSON.stringify` (`limitedStringify(part)`), counting base64 image/file attachments (`data:image/*;base64,...` inside `tool-result` `file` parts) as `bytes / 3` text tokens and `toolChars`, while only checking top-level `part.type` for `mediaPresent`. Reading 2 screenshots (`~491 KB` base64) injected `+163k` fake trailing tokens on top of real provider tokens (`172k + 164k = 336k >= 250k`), triggering premature `autoCompact` at ~`160k–172k` real tokens and inflating TUI `tools` composition share above `80%–95%`.
+  - **Fix:** Added bounded media-aware `measurePart()` in `src/pressure.ts` that detects top-level and nested `file`/`image`/`media` items and `data:*;base64,` URIs, sets `mediaPresent = true`, charges a realistic bounded flat media token estimate (`1200` tokens/attachment), and excludes raw base64 bytes from `estimatedChars` and `toolChars`. Applied matching base64/media exclusions to `messageBreakdown()` (`src/tui-model.ts`) and `textChars()` (`src/memory.ts`), and guarded `autoCompact` against unverified non-native estimates when `mediaPresent === true`.
+- **Critical Fix: Eliminate LLM Few-Shot Subagent Prompt Poisoning (`src/prune.ts`, `src/config.ts`)**:
+  - **Root Cause:** `collectOldToolInputCandidates()` did not check `PROTECTED_NAME`, `PROTECTED_NAME` omitted `subagent`/`agent`/`spawn`, and `pruneOldToolInputs` defaulted to `true` — rewriting past delegation tool-call `prompt` arguments into `[opencode-trim: aged tool input omitted] (~N tokens; head: "...")`, which caused models to imitate the stub placeholder when issuing new subagent calls.
+  - **Fix:** Added `subagent`, `agent`, and `spawn` to `PROTECTED_NAME`, enforced `PROTECTED_NAME` in `collectOldToolInputCandidates()` and `supersedeWrites`, added `prompt`/`message`/`messages`/`instruction`/`instructions`/`description`/`query`/`summary`/`evidence`/`text`/`system` to `OLD_INPUT_SKIP`, and changed `DEFAULTS.pruneOldToolInputs` to `false` (opt-in only for non-protected data payloads).
+- **Pressure Pruning, Native Token Baseline & Diagnostics Hardening (`src/prune.ts`, `src/cache.ts`, `src/plugin.ts`, `src/pressure.ts`)**:
+  - **Media Sessions with Real Provider Tokens:** Allowed `dueToPressure` pruning when `mediaPresent === true` once real provider `reportedTokens` are available (keeping unverified non-native media estimates conservative).
+  - **Accurate Native `baselineChars` Across Aborts & Restarts:** Snapshotted `baselineChars` into each `nativeBySession` entry on `session.step.ended` (preventing desync when a turn aborts without `step.ended`), and tracked `hydratedDrops` / `replayedChars` so post-restart seeded provider tokens never double-subtract already-persisted drops.
+  - **V2 `topTools` & Ephemeral Read-Only Coverage:** Fixed `topTools` diagnostics to extract `part.toolName` before falling back to `role`; added `READONLY_EPHEMERAL_SUFFIX` (`*_status`, `*_watch`, `*_logs`, `*_poll`, `*_check` — archived to `tool_vault`, never mislabeled live-disk, with `PROTECTED_NAME`/`WRITE_NAME` still taking precedence) and read-only `git ls-files`/`ls-tree`/`rev-parse`/`describe`/`merge-base` to `SAFE_SHELL`.
+- **Verification:** **`587 / 587`** tests passing across 32 suites (`npm run check` — strict `tsc --noEmit`, `dist/` build, syntax check, new `test/production-audit-fixes.test.ts` suite + 8-session live OpenCode V2 replay audit with 0 anomalies).
+
 ## 0.12.2 — 2026-11-25
 
 - **Critical Fix: Eliminate Adaptive-Pruning Token Oscillation (`src/prune.ts`, `src/cache.ts`)**:

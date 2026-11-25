@@ -9,11 +9,13 @@ export interface CacheGate {
   forceFlush?: boolean;
   adaptiveTier?: 0 | 1 | 2;
   plannedDrops: Set<string>;
+  hydratedDrops?: Set<string>;
   finish: (ids: Iterable<string>, opts?: { deferred?: boolean }) => void;
 }
 export interface CacheSessionEntry {
   identity: string;
   plannedDrops: Set<string>;
+  hydratedDrops?: Set<string>;
   sizeMark?: number;
   startBandAdmitted?: boolean;
   adaptiveTier?: 0 | 1 | 2;
@@ -160,7 +162,7 @@ export class ContextCache {
           }
         }catch{/* best-effort hydration */}
       }
-      entry={identity,plannedDrops:hydrated,startBandAdmitted:inStartBand,adaptiveTier,lastRequestAt:now,lastCacheRead:observedRead};
+      entry={identity,plannedDrops:hydrated,hydratedDrops:hydrated.size>0?new Set(hydrated):undefined,startBandAdmitted:inStartBand,adaptiveTier,lastRequestAt:now,lastCacheRead:observedRead};
     }else if(changed){
       // A model/tool/system change is a natural provider-cache rebuild: it may
       // admit new decisions, but previously committed drops must keep replaying.
@@ -204,7 +206,7 @@ export class ContextCache {
       (entry.sizeMark===undefined||chars>=entry.sizeMark+budget*0.25))allowNewDrops=true;
     if(allowNewDrops&&chars>budget*1.25)entry.sizeMark=chars;
     const persistence=this.#persistence;
-    return {allowNewDrops,coldCache,warmCache,forceFlush,adaptiveTier,plannedDrops:entry.plannedDrops,
+    return {allowNewDrops,coldCache,warmCache,forceFlush,adaptiveTier,plannedDrops:entry.plannedDrops,...(entry.hydratedDrops?{hydratedDrops:entry.hydratedDrops}:{}),
       finish(ids, finishOpts){
         if(finishOpts?.deferred===true){
           if(crossedStartBand)entry.startBandAdmitted=prevStartBand??false;

@@ -37,6 +37,7 @@ async function contextTokens(ctx, sessionID) {
 const MAX_MESSAGES = 20_000;
 const MAX_DEPTH = 6;
 const SKIP_KEYS = new Set(['data', 'base64', 'bytes', 'blob', 'image', 'media']);
+const DATA_URI_RE = /^data:[^;,\s]{1,80};base64,/i;
 /** View of messages for estimation only: host `{type,text}` / `{parts}` messages count like `content`. Never mutates. */
 function normalizeMessages(list) {
     const out = [];
@@ -61,7 +62,8 @@ function textChars(root) {
         if (budget.left <= 0 || depth > MAX_DEPTH)
             return;
         if (typeof v === 'string') {
-            budget.left -= v.length;
+            if (!DATA_URI_RE.test(v.slice(0, 128)))
+                budget.left -= v.length;
             return;
         }
         if (v === null || typeof v !== 'object')

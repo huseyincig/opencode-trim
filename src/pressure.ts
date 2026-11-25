@@ -96,6 +96,73 @@ function limitedStringify(value: unknown, maxLength: number = 600_000): string {
   try { const encoded=JSON.stringify(value); return typeof encoded==='string' ? encoded.slice(0,maxLength) : ''; }
   catch { return ''; }
 }
+const MEDIA_PART_TYPES = new Set(['media', 'image', 'file']);
+const MEDIA_BINARY_KEYS = new Set(['data', 'base64', 'bytes', 'blob']);
+const DATA_URI_BASE64 = /^data:[^;,\s]{1,80};base64,/i;
+const MEDIA_ITEM_TOKENS = 1200;
+
+/**
+ * Bounded, media-aware measurement of a single message content part.
+ * Never JSON.stringify-s base64 data URIs or binary file/image attachments into
+ * estimatedChars, toolChars, or bytes/3 token counts; instead marks mediaPresent
+ * and charges a realistic bounded flat token estimate per media attachment.
+ */
+function measurePart(root: unknown, maxChars: number = 600_000): { chars: number; tokens: number; media: boolean } {
+  let chars = 0;
+  let tokens = 0;
+  let media = false;
+  let nodes = 0;
+  let mediaCount = 0;
+  const seen = new WeakSet<object>();
+  const walk = (v: unknown, depth: number): void => {
+    if (v === null || v === undefined || depth > 8 || ++nodes > 4096) return;
+    if (typeof v === 'string') {
+      if (DATA_URI_BASE64.test(v.slice(0, 128))) {
+        media = true;
+        if (++mediaCount <= 32) tokens += MEDIA_ITEM_TOKENS;
+        return;
+      }
+      if (chars >= maxChars) return;
+      const slice = v.length > maxChars - chars ? v.slice(0, maxChars - chars) : v;
+      chars += slice.length;
+      tokens += estimateTokens(slice);
+      return;
+    }
+    if (typeof v === 'number' || typeof v === 'boolean') {
+      if (chars < maxChars) chars += 4;
+      tokens += 1;
+      return;
+    }
+    if (typeof v !== 'object') return;
+    if (seen.has(v)) return;
+    seen.add(v);
+    if (Array.isArray(v)) {
+      const lim = Math.min(v.length, 256);
+      for (let i = 0; i < lim && nodes <= 4096; i++) walk(v[i], depth + 1);
+      return;
+    }
+    const rec = v as Record<string, unknown>;
+    const t = typeof rec.type === 'string' ? rec.type.toLowerCase() : '';
+    if (MEDIA_PART_TYPES.has(t)) {
+      media = true;
+      if (++mediaCount <= 32) tokens += MEDIA_ITEM_TOKENS;
+      return;
+    }
+    let keyCount = 0;
+    for (const k of Object.keys(rec)) {
+      if (++keyCount > 128 || nodes > 4096) break;
+      const val = rec[k];
+      if (MEDIA_BINARY_KEYS.has(k) && typeof val === 'string' && val.length >= 256) {
+        media = true;
+        if (++mediaCount <= 32) tokens += MEDIA_ITEM_TOKENS;
+        continue;
+      }
+      walk(val, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return { chars, tokens, media };
+}
 function parseTokenBag(t: any): number | undefined {
   if(!obj(t)) return undefined;
   const inp=asPositiveInt(t.input)??asPositiveInt(t.prompt)??asPositiveInt(t.inputTokens)??0;
@@ -196,13 +263,13 @@ export function estimateRequest(event: any, modelLimits: Map<string, ModelLimitE
     } else if(Array.isArray(content)) {
       for(const part of content) {
         if(!obj(part)) continue;
-        if(part.type==='media'||part.type==='image'||part.type==='file') mediaPresent=true;
-        const text=limitedStringify(part);
-        estimatedChars+=text.length;
-        if(isToolMsg||isToolPart(part)){ toolChars+=text.length; addToolChars(part.tool??part.name??msg?.tool??role,text.length); }
-        else if(isSysMsg) systemChars+=text.length;
-        else chatChars+=text.length;
-        msgTokens+=estimateTokens(text);
+        const measured=measurePart(part);
+        if(measured.media) mediaPresent=true;
+        estimatedChars+=measured.chars;
+        if(isToolMsg||isToolPart(part)){ toolChars+=measured.chars; addToolChars(part.toolName??part.name??part.tool??msg?.toolName??msg?.tool??role,measured.chars); }
+        else if(isSysMsg) systemChars+=measured.chars;
+        else chatChars+=measured.chars;
+        msgTokens+=measured.tokens;
       }
     }
     estimatedTokens+=msgTokens;

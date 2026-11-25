@@ -95,7 +95,7 @@ export const DEFAULTS = Object.freeze({
   pruneHistoricalReasoning: true,
   pruneUnrelatedDiagnostics: true,
   supersedeWrites: true,
-  pruneOldToolInputs: true,
+  pruneOldToolInputs: false,
   pruneAgedDiffs: true,
   pruneResolvedErrors: true,
   adaptivePruning: true,

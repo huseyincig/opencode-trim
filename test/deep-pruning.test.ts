@@ -32,7 +32,7 @@ function makeTail(count = 6) {
 test('v0.12.0 config: new deep-pruning & virtualization options validate defaults and bounds', () => {
   const def = parseOptions();
   assert.equal(def.supersedeWrites, true);
-  assert.equal(def.pruneOldToolInputs, true);
+  assert.equal(def.pruneOldToolInputs, false);
   assert.equal(def.pruneAgedDiffs, true);
   assert.equal(def.pruneResolvedErrors, true);
   assert.equal(def.adaptivePruning, true);
@@ -42,13 +42,14 @@ test('v0.12.0 config: new deep-pruning & virtualization options validate default
   // Valid overrides (0 disables virtualization)
   const custom = parseOptions({
     supersedeWrites: false,
-    pruneOldToolInputs: false,
+    pruneOldToolInputs: true,
     pruneAgedDiffs: false,
     pruneResolvedErrors: false,
     adaptivePruning: false,
     virtualizeOutputChars: 0,
   });
   assert.equal(custom.supersedeWrites, false);
+  assert.equal(custom.pruneOldToolInputs, true);
   assert.equal(custom.virtualizeOutputChars, 0);
 
   // Invalid values rejected
@@ -139,8 +140,9 @@ test('Pattern 1a: supersedeWrites prunes oversized write/edit inputs superseded 
   assert.equal(messages[4].content[0].input.content, bigWriteInstr, 'instruction file write must stay intact');
 });
 
-test('Pattern 1b: pruneOldToolInputs compacts aged oversized delegation/query inputs while preserving sensitive/write/recent calls', () => {
+test('Pattern 1b: opt-in pruneOldToolInputs compacts aged oversized non-prompt payload inputs while preserving delegation/prompt/sensitive/write/recent calls', () => {
   const opts = parseOptions({
+    pruneOldToolInputs: true,
     protectRecentMessages: 4,
     protectRecentTokens: 1024,
     keepRecentToolResults: 1,
@@ -148,23 +150,34 @@ test('Pattern 1b: pruneOldToolInputs compacts aged oversized delegation/query in
     pruneMinResultChars: 400,
     prunePreviewLines: 0,
   });
-  const longPrompt = 'Investigate memory leak in worker pool\n' + 'detail line about worker pool\n'.repeat(80);
+  const longPayload = 'Investigate memory leak in worker pool\n' + 'detail line about worker pool\n'.repeat(80);
+  const longSubPrompt = 'Subagent instructions that must never be imitated as a stub\n' + 'step line\n'.repeat(80);
   const longSecretInput = 'secret payload body\n'.repeat(80);
   const messages: any[] = [
     {
+      id: 'ana-call',
+      role: 'assistant',
+      content: [{ type: 'tool-call', id: 'c-ana', name: 'custom_analyzer', input: { mode: 'deep', payload: longPayload } }],
+    },
+    {
+      id: 'ana-res',
+      role: 'tool',
+      content: [{ type: 'tool-result', id: 'c-ana', name: 'custom_analyzer', result: { type: 'text', value: 'Found root cause in pool.ts' } }],
+    },
+    {
       id: 'sub-call',
       role: 'assistant',
-      content: [{ type: 'tool-call', id: 'c-sub', name: 'subagent', input: { role: 'research', prompt: longPrompt } }],
+      content: [{ type: 'tool-call', id: 'c-sub', name: 'subagent', input: { role: 'research', prompt: longSubPrompt } }],
     },
     {
       id: 'sub-res',
       role: 'tool',
-      content: [{ type: 'tool-result', id: 'c-sub', name: 'subagent', result: { type: 'text', value: 'Found root cause in pool.ts' } }],
+      content: [{ type: 'tool-result', id: 'c-sub', name: 'subagent', result: { type: 'text', value: 'Subagent done' } }],
     },
     {
       id: 'auth-call',
       role: 'assistant',
-      content: [{ type: 'tool-call', id: 'c-auth', name: 'auth_check', input: { prompt: longSecretInput } }],
+      content: [{ type: 'tool-call', id: 'c-auth', name: 'auth_check', input: { payload: longSecretInput } }],
     },
     {
       id: 'auth-res',
@@ -180,11 +193,12 @@ test('Pattern 1b: pruneOldToolInputs compacts aged oversized delegation/query in
     { allowNewDrops: true, directory: '/proj', pressure: { ratio: 0.72, usableTokens: 20000 } },
   );
   assert.ok(res.pruned >= 1);
-  assert.equal(messages[0].content[0].input.role, 'research', 'short metadata fields stay intact');
-  assert.ok(messages[0].content[0].input.prompt.includes(PRUNED_OLD_INPUT), 'oversized old subagent prompt pruned');
-  assert.ok(messages[0].content[0].input.prompt.includes('Investigate memory leak'), 'keeps concise head preview');
-  assert.ok(messages[0].content[0].input.prompt.length < 300);
-  assert.equal(messages[2].content[0].input.prompt, longSecretInput, 'sensitive auth tool input must never be pruned');
+  assert.equal(messages[0].content[0].input.mode, 'deep', 'short metadata fields stay intact');
+  assert.ok(messages[0].content[0].input.payload.includes(PRUNED_OLD_INPUT), 'oversized old analyzer payload pruned when opted in');
+  assert.ok(messages[0].content[0].input.payload.includes('Investigate memory leak'), 'keeps concise head preview');
+  assert.ok(messages[0].content[0].input.payload.length < 300);
+  assert.equal(messages[2].content[0].input.prompt, longSubPrompt, 'subagent prompt must NEVER be pruned');
+  assert.equal(messages[4].content[0].input.payload, longSecretInput, 'sensitive auth tool input must never be pruned');
 });
 
 test('Pattern 2a: trim_reduce scope="span" atomically collapses aged read-only tool-call/result pairs without breaking role alternation or writes/errors', () => {
@@ -750,8 +764,9 @@ test('DBG-04, DBG-05, DBG-06, DBG-07, DBG-08, DBG-09: relevance reads shell comm
   );
   assert.ok(shellHot > shellCold, `shellHot (${shellHot}) must exceed shellCold (${shellCold})`);
 
-  // DBG-05: WRITE_NAME tools (e.g. create_record, send_email) must NEVER have inputs pruned by pruneOldToolInputs
+  // DBG-05: WRITE_NAME tools (e.g. create_record, send_email) and signed-reasoning assistant calls must NEVER have inputs pruned even with pruneOldToolInputs=true
   const opts = parseOptions({
+    pruneOldToolInputs: true,
     protectRecentMessages: 4,
     protectRecentTokens: 1024,
     keepRecentToolResults: 1,
@@ -763,13 +778,13 @@ test('DBG-04, DBG-05, DBG-06, DBG-07, DBG-08, DBG-09: relevance reads shell comm
   const wMsgs: any[] = [
     { id: 'c1', role: 'assistant', content: [{ type: 'tool-call', id: 'id1', name: 'create_record', input: { body: bigBody } }] },
     { id: 'r1', role: 'tool', content: [{ type: 'tool-result', id: 'id1', name: 'create_record', result: { type: 'text', value: 'created' } }] },
-    { id: 'c2', role: 'assistant', content: [{ type: 'reasoning', text: 'signed', encrypted: 'enc_1' }, { type: 'tool-call', id: 'id2', name: 'subagent', input: { prompt: bigBody } }] },
-    { id: 'r2', role: 'tool', content: [{ type: 'tool-result', id: 'id2', name: 'subagent', result: { type: 'text', value: 'done' } }] },
+    { id: 'c2', role: 'assistant', content: [{ type: 'reasoning', text: 'signed', encrypted: 'enc_1' }, { type: 'tool-call', id: 'id2', name: 'custom_analyzer', input: { payload: bigBody } }] },
+    { id: 'r2', role: 'tool', content: [{ type: 'tool-result', id: 'id2', name: 'custom_analyzer', result: { type: 'text', value: 'done' } }] },
     ...makeTail(6),
   ];
   pruneContext({ sessionID: 's-dbg05', messages: wMsgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20000 } });
   assert.equal(wMsgs[0].content[0].input.body, bigBody, 'WRITE_NAME tool input must never be pruned by pruneOldToolInputs');
-  assert.equal(wMsgs[2].content[1].input.prompt, bigBody, 'signed-reasoning assistant tool-call input must never be mutated');
+  assert.equal(wMsgs[2].content[1].input.payload, bigBody, 'signed-reasoning assistant tool-call input must never be mutated');
 
   // DBG-07: quoted cd path + verification command resolves earlier identical failure
   const vMsgs: any[] = [

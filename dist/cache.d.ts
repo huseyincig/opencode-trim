@@ -8,6 +8,7 @@ export interface CacheGate {
     forceFlush?: boolean;
     adaptiveTier?: 0 | 1 | 2;
     plannedDrops: Set<string>;
+    hydratedDrops?: Set<string>;
     finish: (ids: Iterable<string>, opts?: {
         deferred?: boolean;
     }) => void;
@@ -15,6 +16,7 @@ export interface CacheGate {
 export interface CacheSessionEntry {
     identity: string;
     plannedDrops: Set<string>;
+    hydratedDrops?: Set<string>;
     sizeMark?: number;
     startBandAdmitted?: boolean;
     adaptiveTier?: 0 | 1 | 2;

@@ -29,6 +29,7 @@ export interface ReduceDirective {
 export interface PruneResult {
     pruned: number;
     removedChars: number;
+    replayedChars?: number;
     reason: 'pruned' | 'cache-deferred' | 'below-pressure' | 'no-safe-target' | 'disabled';
     plannedIds: string[];
     eligibleChars?: number;

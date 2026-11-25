@@ -35,6 +35,7 @@ async function contextTokens(ctx: any, sessionID: string): Promise<number | unde
 const MAX_MESSAGES = 20_000;
 const MAX_DEPTH = 6;
 const SKIP_KEYS = new Set(['data', 'base64', 'bytes', 'blob', 'image', 'media']);
+const DATA_URI_RE = /^data:[^;,\s]{1,80};base64,/i;
 
 /** View of messages for estimation only: host `{type,text}` / `{parts}` messages count like `content`. Never mutates. */
 function normalizeMessages(list: any[]): any[] {
@@ -53,7 +54,7 @@ function textChars(root: unknown): number {
   const budget = { left: FALLBACK_CHARS, seen: 0 };
   const walk = (v: any, depth: number): void => {
     if (budget.left <= 0 || depth > MAX_DEPTH) return;
-    if (typeof v === 'string') { budget.left -= v.length; return; }
+    if (typeof v === 'string') { if (!DATA_URI_RE.test(v.slice(0, 128))) budget.left -= v.length; return; }
     if (v === null || typeof v !== 'object') return;
     if (++budget.seen > 200_000) { budget.left = 0; return; }
     if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }

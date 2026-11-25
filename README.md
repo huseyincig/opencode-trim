@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/opencode-trim?color=blue&logo=npm&logoColor=white)](https://www.npmjs.com/package/opencode-trim)
 [![OpenCode: V2 (>=2.3.0)](https://img.shields.io/badge/OpenCode-V2%20(%3E%3D2.3.0)-10b981?logo=terminal&logoColor=white)](https://opencode.ai)
 [![V2 host baseline](https://img.shields.io/badge/Host%20baseline-v2.4.1%20verified-10b981?logo=checkmarx&logoColor=white)](AUDIT.md)
-[![Tests: 578/578 Passing](https://img.shields.io/badge/Tests-578%2F578%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
+[![Tests: 587/587 Passing](https://img.shields.io/badge/Tests-587%2F587%20Passing-339933?logo=githubactions&logoColor=white)](AUDIT.md)
 [![Node.js](https://img.shields.io/badge/node-%5E26.0.0-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -18,16 +18,16 @@ OpenCode Trim operates **100% standalone (`Solo`)** with zero runtime dependenci
 
 ## 📊 Verification & Live Acceptance
 
-> OpenCode Trim **v0.12.2** was verified on **25 November 2026** against **OpenCode V2 (`v2.4.1`, `>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
+> OpenCode Trim **v0.12.3** was verified on **25 November 2026** against **OpenCode V2 (`v2.4.1`, `>=2.3.0`)** on Node **26.13.1** and Bun **1.4.5**.
 
-- **Current Automated Verification:** **578 / 578** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, list-path prefix compaction, cold-cache break-even gating, write-invalidated stale-read pruning, `supersedeWrites` & aged oversized `tool-call` input pruning, atomic `trim_reduce` span collapse (with stable replay & rollback) & `/trim flush`, persistent `prune_decisions` across restarts, monotonic high-water pressure-adaptive thresholds & zero-oscillation replay, aged read-only diff & resolved verification-error pruning, zero-LLM local semantic relevance ranking, selective ingestion virtualization (`virtualizeOutputChars` across `shell` and `webfetch`), OpenCode V2 `ReasoningPart.encrypted` protection, live-disk vault exclusion (`liveDiskNotice` across read-only tools and pure file-reading shell commands), FNV-1a `stableMessageKey` replay, post-compaction verification, top-3 tool bloat & overhead diagnostics, SQLite FTS5 memory (`recent`/`scope: "all"` + opt-in frozen `<recent_work>`), vault-wide `trim_expand` search (with smart line-numbering and ReDoS-hardened regex grep), real provider token accounting (`session.step.ended`), `session.deleted`/`fork` lifecycle, non-blocking startup prewarm, 2-stage auto-compaction fallback, OpenCode `v2.4.1` Code Mode, and low-overhead dynamic 3-mode TUI + `/trim` slash command tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, 96-file syntax check, 31 test suites).
+- **Current Automated Verification:** **587 / 587** unit, diagnostic-preservation, security, multi-location isolation, Universal Plugin Mesh interoperability, list-path prefix compaction, cold-cache break-even gating, write-invalidated stale-read pruning, `supersedeWrites` & opt-in non-prompt `tool-call` payload pruning, atomic `trim_reduce` span collapse (with stable replay & rollback) & `/trim flush`, persistent `prune_decisions` across restarts, monotonic high-water pressure-adaptive thresholds & zero-oscillation replay, media-aware base64-safe token/char estimation (`pressure.ts`, `tui-model.ts`, `memory.ts`), aged read-only diff & resolved verification-error pruning, zero-LLM local semantic relevance ranking, selective ingestion virtualization (`virtualizeOutputChars` across `shell` and `webfetch`), OpenCode V2 `ReasoningPart.encrypted` protection, live-disk vault exclusion (`liveDiskNotice` across read-only tools and pure file-reading shell commands), FNV-1a `stableMessageKey` replay, post-compaction verification, top-3 tool bloat & overhead diagnostics, SQLite FTS5 memory (`recent`/`scope: "all"` + opt-in frozen `<recent_work>`), vault-wide `trim_expand` search (with smart line-numbering and ReDoS-hardened regex grep), real provider token accounting (`session.step.ended`), `session.deleted`/`fork` lifecycle, non-blocking startup prewarm, 2-stage auto-compaction fallback, OpenCode `v2.4.1` Code Mode, and low-overhead dynamic 3-mode TUI + `/trim` slash command tests passing (`npm run check` — strict `tsc --noEmit`, `dist/` build, syntax check, 32 test suites).
 - **Deterministic Compression & Pruning Benchmark (`npm run bench`):**
   - **24 Command Families:** `1,801,616 B` input → `2,483 B` output (`≈99.86%` reduction on the adversarial progress/noise corpus, `allChanged: true`, per-family median **0.04–0.20 ms** with RAM LRU memoization).
   - **Context Pruning:** `388 / 400` eligible historical tool results pruned (`757,266` characters / `≈252,422` estimated tokens reclaimed, median `≈7 ms`).
 - **Packed Tarball & Dual-Runtime Verification:** `npm pack` `.tgz` artifact verified in isolated Node **26.13.1** and Bun **1.4.4** sandboxes across `.`, `./tui`, `./rpc`, `./core`, `./prune`, and `./pressure` entrypoints.
 - **Live OpenCode V2 Host Acceptance:** Verified plugin load, `tool.execute.after` shell compression, `session.context` pruning, real-provider compression/pruning (`opencode-go/deepseek-v4.1-flash` and `opencode-go/beam-free`), SQLite FTS5 compaction archiving & `trim_history_search`, multi-location fail-closed isolation, and TUI sidebar rendering across 80–200 column widths.
 
-Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.12.2 release notes](CHANGELOG.md) for the latest changes.
+Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for reproduction commands, host evidence, and documented boundaries, and see the [0.12.3 release notes](CHANGELOG.md) for the latest changes.
 
 ---
 
@@ -49,7 +49,7 @@ Read the comprehensive [Audit & Production Acceptance Report](AUDIT.md) for repr
 
 ## 📦 Installation
 
-The current version is **0.12.2** (OpenCode **V2 `>=2.3.0`**, verified on **`v2.4.1`**, Node.js **`^26.0.0`**).
+The current version is **0.12.3** (OpenCode **V2 `>=2.3.0`**, verified on **`v2.4.1`**, Node.js **`^26.0.0`**).
 
 OpenCode Trim supports **Global**, **Project-Local**, **`.opencode/plugins/` Local Wrapper / Symlink**, **Local Development (`file://`)**, and **Remote TUI Client (`cli.json`)** installation modes.
 
@@ -76,7 +76,7 @@ Or pin an exact version and configure optional features (such as the TUI sidebar
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     [
-      "opencode-trim@0.12.2",
+      "opencode-trim@0.12.3",
       {
         "maxTokens": "250k",
         "tui": {
@@ -461,7 +461,7 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 | `supersessionMinChars` | `5000` | `100..200000` | Minimum superseded character mass required to trigger supersession pruning. |
 | `purgeErrorInputs` | `true` | `boolean` | Blank oversized input arguments on stale failed tool calls outside the protected tail while keeping error outputs intact. |
 | `supersedeWrites` | `true` | `boolean` | Prune oversized write/edit/patch input payloads once a later completed read or write touches the same canonical file path (preserving `filePath`). |
-| `pruneOldToolInputs` | `true` | `boolean` | Compact aged oversized (`>= 1000` chars) non-write, non-sensitive `tool-call` string inputs outside the protected tail while retaining a redacted head preview and metadata fields. |
+| `pruneOldToolInputs` | `false` | `boolean` | Opt-in: compact aged oversized (`>= 1000` chars) non-protected, non-write, non-prompt `tool-call` data payload inputs outside the protected tail (delegation/prompt/message/description fields and protected tools are never rewritten). |
 | `pruneAgedDiffs` | `true` | `boolean` | Under force/critical pressure, allow pure read-only `git diff`/`git show`/`git blame` outputs older than `2 * protectRecentMessages` (excluding instruction/secret paths) to be pruned & vaulted. |
 | `pruneResolvedErrors` | `true` | `boolean` | Prune older failed verification shell outputs (`test`/`lint`/`check`/`typecheck`/`build`) once a strictly later identical command succeeds cleanly (excludes timeouts/kills). |
 | `adaptivePruning` | `true` | `boolean` | Under force/critical pressure, adaptively lower min-result/reasoning thresholds (`250`/`160` chars) and preview lines (`1`/`0`) to prevent small-output accumulation. |
@@ -488,8 +488,8 @@ All options are validated strictly at startup (unknown keys or out-of-range numb
 Run the full verification suite locally:
 
 ```bash
-npm run check     # Strict tsc --noEmit, dist/ build, 96-file syntax check + 578 tests
-npm test          # Node.js test runner (578 tests across 31 suites)
+npm run check     # Strict tsc --noEmit, dist/ build, syntax check + 587 tests
+npm test          # Node.js test runner (587 tests across 32 suites)
 npm run bench     # Deterministic 24-family compression & 800-message pruning benchmark
 npm run pack:dry  # Verify packed npm tarball contents
 ```

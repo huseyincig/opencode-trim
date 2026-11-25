@@ -92,7 +92,7 @@ export declare const DEFAULTS: Readonly<{
     pruneHistoricalReasoning: true;
     pruneUnrelatedDiagnostics: true;
     supersedeWrites: true;
-    pruneOldToolInputs: true;
+    pruneOldToolInputs: false;
     pruneAgedDiffs: true;
     pruneResolvedErrors: true;
     adaptivePruning: true;

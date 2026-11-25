@@ -158,7 +158,7 @@ export class ContextCache {
                 }
                 catch { /* best-effort hydration */ }
             }
-            entry = { identity, plannedDrops: hydrated, startBandAdmitted: inStartBand, adaptiveTier, lastRequestAt: now, lastCacheRead: observedRead };
+            entry = { identity, plannedDrops: hydrated, hydratedDrops: hydrated.size > 0 ? new Set(hydrated) : undefined, startBandAdmitted: inStartBand, adaptiveTier, lastRequestAt: now, lastCacheRead: observedRead };
         }
         else if (changed) {
             // A model/tool/system change is a natural provider-cache rebuild: it may
@@ -210,7 +210,7 @@ export class ContextCache {
         if (allowNewDrops && chars > budget * 1.25)
             entry.sizeMark = chars;
         const persistence = this.#persistence;
-        return { allowNewDrops, coldCache, warmCache, forceFlush, adaptiveTier, plannedDrops: entry.plannedDrops,
+        return { allowNewDrops, coldCache, warmCache, forceFlush, adaptiveTier, plannedDrops: entry.plannedDrops, ...(entry.hydratedDrops ? { hydratedDrops: entry.hydratedDrops } : {}),
             finish(ids, finishOpts) {
                 if (finishOpts?.deferred === true) {
                     if (crossedStartBand)

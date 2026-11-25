@@ -604,10 +604,10 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   const autoCompactState=new Map<string, { inFlight: boolean; triggeredAt: number; turnsSince: number; lastMsgCount: number }>();
   const reduceQueue=new Map<string, ReduceDirective[]>();
   // Real provider token counts (same numbers the OpenCode screen shows): input + cache.read of the latest assistant step.
-  const nativeBySession=new Map<string, { id: string; tokens: number; modelKey?: string; overheadTokens?: number }>();
+  const nativeBySession=new Map<string, { id: string; tokens: number; modelKey?: string; overheadTokens?: number; baselineChars: number; seeded?: boolean }>();
   const lastModelBySession=new Map<string, string>();
   const lastOverheadBySession=new Map<string, number>();
-  const appliedChars=new Map<string, number>();
+  const pendingAppliedChars=new Map<string, number>();
   const nativeSeeded=new Set<string>();
   const modelKeyOf=(m: any): string => (obj(m)&&typeof m.providerID==='string'&&typeof m.id==='string'?`${m.providerID}/${m.id}`:'');
   const nativeTokensOf=(t: any): number | undefined=>{
@@ -618,7 +618,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     const total=input+read;
     return total>0?total:undefined;
   };
-  const rememberNative=(sid: string, id: unknown, tokens: unknown, modelKey?: string)=>{
+  const rememberNative=(sid: string, id: unknown, tokens: unknown, modelKey?: string, seeded: boolean = false)=>{
     if(obj(tokens)&&obj((tokens as any).cache)&&typeof (tokens as any).cache.read==='number'&&Number.isFinite((tokens as any).cache.read)){
       cache.observeCacheRead(sid,Math.max(0,(tokens as any).cache.read));
     }
@@ -626,9 +626,10 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     if(typeof id!=='string'||!id||total===undefined)return;
     const mk=modelKey||lastModelBySession.get(sid)||undefined;
     const overheadTokens=lastOverheadBySession.get(sid);
+    const baselineChars=seeded?0:(pendingAppliedChars.get(sid)??0);
     nativeBySession.delete(sid);
     if(nativeBySession.size>=128)nativeBySession.delete(nativeBySession.keys().next().value as string);
-    nativeBySession.set(sid,{id,tokens:total,...(mk?{modelKey:mk}:{}),...(overheadTokens!==undefined?{overheadTokens}:{})});
+    nativeBySession.set(sid,{id,tokens:total,baselineChars,...(seeded?{seeded:true}:{}),...(mk?{modelKey:mk}:{}),...(overheadTokens!==undefined?{overheadTokens}:{})});
   };
   let activeVault: any = null;
   let forgetMemorySession: ((sid: string) => void) | null = null;
@@ -679,7 +680,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
           if(Array.isArray(list)){
             for(let i=list.length-1;i>=0;i--){
               const m=list[i];
-              if(obj(m)&&m.type==='assistant'&&nativeTokensOf(m.tokens)!==undefined){rememberNative(sid,m.id,m.tokens,curModelKey||undefined);break;}
+              if(obj(m)&&m.type==='assistant'&&nativeTokensOf(m.tokens)!==undefined){rememberNative(sid,m.id,m.tokens,curModelKey||undefined,true);break;}
             }
           }
         }catch{/* best effort */}
@@ -687,7 +688,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
       if(disposed)return;
       const rawNat=sid?nativeBySession.get(sid):undefined;
       const nat=rawNat&&(!rawNat.modelKey||!curModelKey||rawNat.modelKey===curModelKey)?rawNat:undefined;
-      const nativeInfo=nat?{tokens:new Map([[nat.id,nat.tokens]]),baselineChars:appliedChars.get(sid as string)??0,...(nat.overheadTokens!==undefined?{baselineOverheadTokens:nat.overheadTokens}:{})}:undefined;
+      const nativeInfo=nat?{tokens:new Map([[nat.id,nat.tokens]]),baselineChars:nat.baselineChars,...(nat.overheadTokens!==undefined?{baselineOverheadTokens:nat.overheadTokens}:{})}:undefined;
       const pressure=estimateRequest(event,modelLimits,opts,nativeInfo);
       if(sid&&kind==='context'){
         if(curModelKey){
@@ -714,11 +715,14 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
       if(sid&&result.consumedDirectives)reduceQueue.delete(sid);
       if(sid&&result.pruned>0)dedupeRing.reset(sid);
       gate.finish(result.plannedIds,{deferred:result.warmCacheDeferred===true});
-      const postPressure=(kind==='context'&&result.pruned>0)?estimateRequest(event,modelLimits,opts,nativeInfo):pressure;
+      const postNativeInfo=nat&&nat.seeded&&typeof result.replayedChars==='number'&&result.replayedChars>0
+        ? {...nativeInfo!,baselineChars:result.replayedChars}
+        : nativeInfo;
+      const postPressure=(kind==='context'&&result.pruned>0)?estimateRequest(event,modelLimits,opts,postNativeInfo):pressure;
       if(sid&&kind==='context'){
-        appliedChars.delete(sid);
-        if(appliedChars.size>=128)appliedChars.delete(appliedChars.keys().next().value as string);
-        appliedChars.set(sid,sumPrunedMsgChars(event?.messages));
+        pendingAppliedChars.delete(sid);
+        if(pendingAppliedChars.size>=128)pendingAppliedChars.delete(pendingAppliedChars.keys().next().value as string);
+        pendingAppliedChars.set(sid,sumPrunedMsgChars(event?.messages));
       }
       if(sid&&typeof postPressure.ratio==='number'){
         sessionPressure.delete(sid);
@@ -743,7 +747,9 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
             prev.lastMsgCount=msgCount;
           }
         }
+        const hasConfirmedTokens=!postPressure.mediaPresent||typeof postPressure.reportedTokens==='number';
         if(
+          hasConfirmedTokens &&
           typeof postPressure.ratio==='number' &&
           Number.isFinite(postPressure.ratio) &&
           postPressure.ratio>=1.0 &&
@@ -789,7 +795,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     sessionPressure.delete(sid);
     autoCompactState.delete(sid);
     reduceQueue.delete(sid);
-    nativeBySession.delete(sid);lastModelBySession.delete(sid);lastOverheadBySession.delete(sid);appliedChars.delete(sid);nativeSeeded.delete(sid);
+    nativeBySession.delete(sid);lastModelBySession.delete(sid);lastOverheadBySession.delete(sid);pendingAppliedChars.delete(sid);nativeSeeded.delete(sid);
     observe((s: any)=>s.forgetSession?.(sid));
     try{forgetMemorySession?.(sid);}catch{/* ignore */}
   };
@@ -987,7 +993,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
                 workingState.reset(sid);
                 sessionPressure.delete(sid);
                 reduceQueue.delete(sid);
-                nativeBySession.delete(sid);lastOverheadBySession.delete(sid);appliedChars.delete(sid);
+                nativeBySession.delete(sid);lastOverheadBySession.delete(sid);pendingAppliedChars.delete(sid);
                 const cur=autoCompactState.get(sid);
                 if(cur)cur.inFlight=false;
               }
@@ -1031,7 +1037,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
           workingState.reset(sid);
           sessionPressure.delete(sid);
           reduceQueue.delete(sid);
-          nativeBySession.delete(sid);lastOverheadBySession.delete(sid);appliedChars.delete(sid);
+          nativeBySession.delete(sid);lastOverheadBySession.delete(sid);pendingAppliedChars.delete(sid);
           const cur=autoCompactState.get(sid);
           if(cur)cur.inFlight=false;
         },
@@ -1049,6 +1055,6 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     if(memoryStop)await Promise.resolve().then(memoryStop).catch(()=>{});
     await Promise.allSettled(registrations.reverse().map(reg=>Promise.resolve().then(()=>reg.dispose())));
     await dispose();
-    cache.setPersistence(null);cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();reduceQueue.clear();nativeBySession.clear();lastModelBySession.clear();lastOverheadBySession.clear();appliedChars.clear();nativeSeeded.clear();modelLimits.clear();resetModelLookupAttempts(modelLookups);activeVault=null;
+    cache.setPersistence(null);cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();reduceQueue.clear();nativeBySession.clear();lastModelBySession.clear();lastOverheadBySession.clear();pendingAppliedChars.clear();nativeSeeded.clear();modelLimits.clear();resetModelLookupAttempts(modelLookups);activeVault=null;
   };
 }
