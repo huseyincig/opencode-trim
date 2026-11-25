@@ -338,6 +338,83 @@ test('BUG-05b: hydrated prune_decisions after restart do not double-subtract fro
   );
 });
 
+test('BUG-07: autoCompact runs ONLY on root/main sessions and never leaks into worker/subagent sessions (fail-closed on session.get errors)', async () => {
+  const runCase = async ({
+    sid,
+    eventExtra = {},
+    sessionGet,
+  }: {
+    sid: string;
+    eventExtra?: Record<string, any>;
+    sessionGet?: (args: any) => Promise<any>;
+  }) => {
+    const compactCalls: any[] = [];
+    let getCalls = 0;
+    let contextCb: any;
+    const queue: any[] = [];
+    let wake: any;
+    let done = false;
+    const ctx: any = {
+      options: { maxTokens: '250k', autoCompact: true, protectRecentMessages: 4, tui: { enabled: false }, memory: { enabled: false } },
+      model: { list: async () => ({ data: [{ providerID: 'p', id: 'm', limit: { context: 1_000_000, output: 16_000 } }] }) },
+      tool: { hook: async () => ({ dispose: async () => {} }) },
+      session: {
+        hook: async (name: string, fn: any) => { if (name === 'context') contextCb = fn; return { dispose: async () => {} }; },
+        compact: async (input: any) => { compactCalls.push(input); return { id: 'c' }; },
+        ...(sessionGet ? { get: async (args: any) => { getCalls++; return sessionGet(args); } } : {}),
+      },
+      event: {
+        subscribe: async (args: any) => {
+          args.signal?.addEventListener('abort', () => { done = true; wake?.(); });
+          return (async function* () { while (!done) { if (queue.length) yield queue.shift(); else await new Promise((r) => { wake = r; }); } })();
+        },
+      },
+    };
+    const stop = await setupTrim(ctx);
+    const messages: any[] = [];
+    for (let i = 0; i < 12; i++) {
+      messages.push({ id: `m${i}`, role: i % 2 === 0 ? 'user' : 'assistant', content: [{ type: 'text', text: `msg ${i} ` + 'w'.repeat(400) }] });
+    }
+    messages.push({ id: 'm-last', role: 'assistant', content: [{ type: 'text', text: 'over cap' }] });
+    queue.push({
+      type: 'session.step.ended',
+      data: { sessionID: sid, assistantMessageID: 'm-last', tokens: { input: 20_000, output: 100, reasoning: 0, cache: { read: 250_000, write: 0 } } },
+    });
+    wake?.();
+    await new Promise((r) => setTimeout(r, 30));
+    await contextCb({ sessionID: sid, model: { providerID: 'p', id: 'm' }, tools: {}, system: [], messages, ...eventExtra });
+    await new Promise((r) => setTimeout(r, 20));
+    await stop();
+    return { compactCalls, getCalls };
+  };
+
+  // 1. Direct event.parentID -> worker session, MUST NOT compact
+  const r1 = await runCase({ sid: 'w-1', eventExtra: { parentID: 'root-1' } });
+  assert.equal(r1.compactCalls.length, 0, 'worker with event.parentID must never autoCompact');
+
+  // 2. Direct event.session.parentID -> worker session, MUST NOT compact
+  const r2 = await runCase({ sid: 'w-2', eventExtra: { session: { parentID: 'root-1' } } });
+  assert.equal(r2.compactCalls.length, 0, 'worker with event.session.parentID must never autoCompact');
+
+  // 3. Resolved via ctx.session.get -> parentID set (exact V2 live shape), MUST NOT compact
+  const r3 = await runCase({ sid: 'w-3', sessionGet: async () => ({ id: 'w-3', parentID: 'root-1' }) });
+  assert.equal(r3.compactCalls.length, 0, 'worker detected via ctx.session.get.parentID must never autoCompact');
+
+  // 4. Wrapped envelope { data: { parent_id } } -> worker session, MUST NOT compact
+  const r4 = await runCase({ sid: 'w-4', sessionGet: async () => ({ data: { id: 'w-4', parent_id: 'root-1' } }) });
+  assert.equal(r4.compactCalls.length, 0, 'worker detected via wrapped parent_id must never autoCompact');
+
+  // 5. ctx.session.get throws -> fail closed, MUST NOT compact
+  const r5 = await runCase({ sid: 'w-5', sessionGet: async () => { throw new Error('rpc down'); } });
+  assert.equal(r5.compactCalls.length, 0, 'must fail closed and skip autoCompact when session.get throws');
+
+  // 6. Confirmed main/root session (parentID absent/null) -> MUST compact
+  const r6 = await runCase({ sid: 'main-1', sessionGet: async () => ({ id: 'main-1', parentID: null }) });
+  assert.equal(r6.compactCalls.length, 1, 'confirmed main/root session must still autoCompact');
+  assert.equal(r6.compactCalls[0].sessionID, 'main-1');
+  assert.equal(r6.getCalls, 1, 'session.get checked cleanly');
+});
+
 test('BUG-06: read-only ephemeral status/watch tools and git ls-files are eligible for pruning and archived (not live-disk)', () => {
   const opts = parseOptions({
     protectRecentMessages: 4,

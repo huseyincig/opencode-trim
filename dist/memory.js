@@ -527,11 +527,14 @@ export async function setupMemory(ctx, opts, hooks) {
                     event?.kind !== 'generate') {
                     let block = frozenRecentWork.get(sid);
                     if (block === undefined) {
-                        let isChild = Boolean(event?.parentID || event?.session?.parentID);
+                        let isChild = Boolean(event?.parentID || event?.parentId || event?.parent_id || event?.session?.parentID || event?.session?.parentId || event?.session?.parent_id);
                         if (!isChild && typeof ctx?.session?.get === 'function') {
                             try {
                                 const info = await ctx.session.get({ sessionID: sid });
-                                if (!obj(info) || info.parentID || info.parentId)
+                                if (!obj(info) ||
+                                    info.parentID || info.parentId || info.parent_id ||
+                                    info.data?.parentID || info.data?.parentId || info.data?.parent_id ||
+                                    info.session?.parentID || info.session?.parentId || info.session?.parent_id)
                                     isChild = true;
                             }
                             catch {

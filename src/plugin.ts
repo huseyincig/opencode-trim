@@ -602,6 +602,43 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
   const workingState=new SessionWorkingState();
   const sessionPressure=new Map<string, number>();
   const autoCompactState=new Map<string, { inFlight: boolean; triggeredAt: number; turnsSince: number; lastMsgCount: number }>();
+  const sessionIsChild=new Map<string, boolean>();
+  const hasParentRef=(holder: any): boolean => {
+    for(const h of [holder,holder?.data,holder?.session]){
+      if(!obj(h))continue;
+      for(const k of ['parentID','parentId','parent_id']){
+        const v=h[k];
+        if(typeof v==='string'&&v.trim().length>0)return true;
+      }
+    }
+    return false;
+  };
+  const isChildSession=async(sid: string, event: any): Promise<boolean> => {
+    if(hasParentRef(event)){
+      sessionIsChild.delete(sid);
+      if(sessionIsChild.size>=256)sessionIsChild.delete(sessionIsChild.keys().next().value as string);
+      sessionIsChild.set(sid,true);
+      return true;
+    }
+    const cached=sessionIsChild.get(sid);
+    if(cached!==undefined){
+      sessionIsChild.delete(sid);
+      sessionIsChild.set(sid,cached);
+      return cached;
+    }
+    if(typeof ctx?.session?.get!=='function')return false;
+    try{
+      const info=await ctx.session.get({sessionID:sid});
+      if(!obj(info))return true; // Fail closed: unverified session must not auto-compact.
+      const child=hasParentRef(info);
+      sessionIsChild.delete(sid);
+      if(sessionIsChild.size>=256)sessionIsChild.delete(sessionIsChild.keys().next().value as string);
+      sessionIsChild.set(sid,child);
+      return child;
+    }catch{
+      return true; // Fail closed on lookup error.
+    }
+  };
   const reduceQueue=new Map<string, ReduceDirective[]>();
   // Real provider token counts (same numbers the OpenCode screen shows): input + cache.read of the latest assistant step.
   const nativeBySession=new Map<string, { id: string; tokens: number; modelKey?: string; overheadTokens?: number; baselineChars: number; seeded?: boolean }>();
@@ -761,13 +798,16 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
             prev.turnsSince>=3
           );
           if(canTrigger){
-            autoCompactState.delete(sid);
-            if(autoCompactState.size>=128)autoCompactState.delete(autoCompactState.keys().next().value as string);
-            autoCompactState.set(sid,{inFlight:true,triggeredAt:now,turnsSince:0,lastMsgCount:msgCount});
-            Promise.resolve().then(()=>ctx.session.compact({sessionID:sid,delivery:'queue'})).catch(()=>{
-              const cur=autoCompactState.get(sid);
-              if(cur)cur.inFlight=false;
-            });
+            const child=await isChildSession(sid,event);
+            if(!child&&!disposed){
+              autoCompactState.delete(sid);
+              if(autoCompactState.size>=128)autoCompactState.delete(autoCompactState.keys().next().value as string);
+              autoCompactState.set(sid,{inFlight:true,triggeredAt:now,turnsSince:0,lastMsgCount:msgCount});
+              Promise.resolve().then(()=>ctx.session.compact({sessionID:sid,delivery:'queue'})).catch(()=>{
+                const cur=autoCompactState.get(sid);
+                if(cur)cur.inFlight=false;
+              });
+            }
           }
         }
       }
@@ -794,6 +834,7 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     workingState.reset(sid);
     sessionPressure.delete(sid);
     autoCompactState.delete(sid);
+    sessionIsChild.delete(sid);
     reduceQueue.delete(sid);
     nativeBySession.delete(sid);lastModelBySession.delete(sid);lastOverheadBySession.delete(sid);pendingAppliedChars.delete(sid);nativeSeeded.delete(sid);
     observe((s: any)=>s.forgetSession?.(sid));
@@ -1055,6 +1096,6 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
     if(memoryStop)await Promise.resolve().then(memoryStop).catch(()=>{});
     await Promise.allSettled(registrations.reverse().map(reg=>Promise.resolve().then(()=>reg.dispose())));
     await dispose();
-    cache.setPersistence(null);cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();reduceQueue.clear();nativeBySession.clear();lastModelBySession.clear();lastOverheadBySession.clear();pendingAppliedChars.clear();nativeSeeded.clear();modelLimits.clear();resetModelLookupAttempts(modelLookups);activeVault=null;
+    cache.setPersistence(null);cache.clear();dedupeRing.clear();workingState.clear();sessionPressure.clear();autoCompactState.clear();sessionIsChild.clear();reduceQueue.clear();nativeBySession.clear();lastModelBySession.clear();lastOverheadBySession.clear();pendingAppliedChars.clear();nativeSeeded.clear();modelLimits.clear();resetModelLookupAttempts(modelLookups);activeVault=null;
   };
 }

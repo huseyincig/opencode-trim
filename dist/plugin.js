@@ -687,6 +687,50 @@ export async function setupTrim(ctx) {
     const workingState = new SessionWorkingState();
     const sessionPressure = new Map();
     const autoCompactState = new Map();
+    const sessionIsChild = new Map();
+    const hasParentRef = (holder) => {
+        for (const h of [holder, holder?.data, holder?.session]) {
+            if (!obj(h))
+                continue;
+            for (const k of ['parentID', 'parentId', 'parent_id']) {
+                const v = h[k];
+                if (typeof v === 'string' && v.trim().length > 0)
+                    return true;
+            }
+        }
+        return false;
+    };
+    const isChildSession = async (sid, event) => {
+        if (hasParentRef(event)) {
+            sessionIsChild.delete(sid);
+            if (sessionIsChild.size >= 256)
+                sessionIsChild.delete(sessionIsChild.keys().next().value);
+            sessionIsChild.set(sid, true);
+            return true;
+        }
+        const cached = sessionIsChild.get(sid);
+        if (cached !== undefined) {
+            sessionIsChild.delete(sid);
+            sessionIsChild.set(sid, cached);
+            return cached;
+        }
+        if (typeof ctx?.session?.get !== 'function')
+            return false;
+        try {
+            const info = await ctx.session.get({ sessionID: sid });
+            if (!obj(info))
+                return true; // Fail closed: unverified session must not auto-compact.
+            const child = hasParentRef(info);
+            sessionIsChild.delete(sid);
+            if (sessionIsChild.size >= 256)
+                sessionIsChild.delete(sessionIsChild.keys().next().value);
+            sessionIsChild.set(sid, child);
+            return child;
+        }
+        catch {
+            return true; // Fail closed on lookup error.
+        }
+    };
     const reduceQueue = new Map();
     // Real provider token counts (same numbers the OpenCode screen shows): input + cache.read of the latest assistant step.
     const nativeBySession = new Map();
@@ -882,15 +926,18 @@ export async function setupTrim(ctx) {
                     const canTrigger = !prev || ((!prev.inFlight || now - prev.triggeredAt > 120_000) &&
                         prev.turnsSince >= 3);
                     if (canTrigger) {
-                        autoCompactState.delete(sid);
-                        if (autoCompactState.size >= 128)
-                            autoCompactState.delete(autoCompactState.keys().next().value);
-                        autoCompactState.set(sid, { inFlight: true, triggeredAt: now, turnsSince: 0, lastMsgCount: msgCount });
-                        Promise.resolve().then(() => ctx.session.compact({ sessionID: sid, delivery: 'queue' })).catch(() => {
-                            const cur = autoCompactState.get(sid);
-                            if (cur)
-                                cur.inFlight = false;
-                        });
+                        const child = await isChildSession(sid, event);
+                        if (!child && !disposed) {
+                            autoCompactState.delete(sid);
+                            if (autoCompactState.size >= 128)
+                                autoCompactState.delete(autoCompactState.keys().next().value);
+                            autoCompactState.set(sid, { inFlight: true, triggeredAt: now, turnsSince: 0, lastMsgCount: msgCount });
+                            Promise.resolve().then(() => ctx.session.compact({ sessionID: sid, delivery: 'queue' })).catch(() => {
+                                const cur = autoCompactState.get(sid);
+                                if (cur)
+                                    cur.inFlight = false;
+                            });
+                        }
                     }
                 }
             }
@@ -923,6 +970,7 @@ export async function setupTrim(ctx) {
         workingState.reset(sid);
         sessionPressure.delete(sid);
         autoCompactState.delete(sid);
+        sessionIsChild.delete(sid);
         reduceQueue.delete(sid);
         nativeBySession.delete(sid);
         lastModelBySession.delete(sid);
@@ -1262,6 +1310,7 @@ export async function setupTrim(ctx) {
         workingState.clear();
         sessionPressure.clear();
         autoCompactState.clear();
+        sessionIsChild.clear();
         reduceQueue.clear();
         nativeBySession.clear();
         lastModelBySession.clear();

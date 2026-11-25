@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.4 — 2026-11-26
+
+- **Critical Fix: Restrict `autoCompact` Strictly to Main/Root Sessions (`src/plugin.ts`, `src/memory.ts`)**:
+  - **Root Cause:** Stage-2 `autoCompact` (`ctx.session.compact({ sessionID, delivery: "queue" })`) did not verify whether `sessionID` belonged to a child/worker/subagent session (`parentID` / `parentId` / `parent_id`), allowing compaction to be queued on spawned worker sessions when they crossed the token cap.
+  - **Fix:** Added a bounded per-session `isChildSession(sid, event)` guard in `src/plugin.ts` (checking direct event `parentID`/`parentId`/`parent_id`, `event.data`, `event.session`, and cached `ctx.session.get({ sessionID })` lookups, failing closed whenever `ctx.session.get` errors or returns a non-object) so `autoCompact` runs **only** on confirmed root/main sessions and never leaks into worker/subagent sessions. Aligned `src/memory.ts` `<recent_work>` child detection to check the same parent-ID envelope fields.
+- **Verification:** **`588 / 588`** tests passing across 32 suites (`npm run check` — strict `tsc --noEmit`, `dist/` build, 96-file syntax check, new `BUG-07` worker/root `autoCompact` regression test in `test/production-audit-fixes.test.ts`).
+
 ## 0.12.3 — 2026-11-25
 
 - **Critical Fix: Media-Aware Base64 Token & Breakdown Estimation (`src/pressure.ts`, `src/tui-model.ts`, `src/memory.ts`, `src/plugin.ts`)**:
