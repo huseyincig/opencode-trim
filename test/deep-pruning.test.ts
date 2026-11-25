@@ -560,3 +560,288 @@ test('Pattern 6: selective ingestion virtualization vaults huge unstructured eph
   processToolEvent(evErr, opts, undefined, { directory: '/proj', sessionID: 's-virt', vault });
   assert.equal(vaulted.size, 1, 'failed command must NOT be virtualized');
 });
+
+test('DBG-01: OpenCode V2 ReasoningPart.encrypted is treated as signed reasoning and never mutated', () => {
+  const opts = parseOptions({
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneAfterToolChars: 10000,
+    pruneMinResultChars: 200,
+    prunePreviewLines: 0,
+  });
+  const encText = 'encrypted reasoning trace '.repeat(60);
+  const plainText = 'unsigned reasoning trace '.repeat(60);
+  const messages: any[] = [
+    {
+      id: 'a-enc',
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', text: encText, encrypted: 'enc_blob_abc123' },
+        { type: 'text', text: 'answer 1' },
+      ],
+    },
+    {
+      id: 'a-plain',
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', text: plainText },
+        { type: 'text', text: 'answer 2' },
+      ],
+    },
+    ...makeTail(6),
+  ];
+  pruneContext(
+    { sessionID: 's-dbg01', messages },
+    opts,
+    { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20000 } },
+  );
+  assert.equal(messages[0].content[0].text, encText, 'V2 encrypted reasoning part must never be mutated');
+  assert.equal(messages[1].content[0].text, '[opencode-trim: historical reasoning trace omitted]', 'unsigned reasoning still pruned');
+});
+
+test('DBG-02: span collapse replays stably across turns via plannedDrops without resurrecting, and protects signed-reasoning assistant messages', () => {
+  const opts = parseOptions({
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneAfterToolChars: 10000,
+    pruneMinResultChars: 200,
+    prunePreviewLines: 0,
+  });
+  const makeFresh = () => [
+    { id: 'u0', role: 'user', content: [{ type: 'text', text: 'Inspect files' }] },
+    {
+      id: 'a-signed',
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', text: 'signed thought', encrypted: 'sig_xyz' },
+        { type: 'tool-call', id: 'c-sig', name: 'read', input: { filePath: 'src/signed.ts' } },
+      ],
+    },
+    {
+      id: 't-signed',
+      role: 'tool',
+      content: [{ type: 'tool-result', id: 'c-sig', name: 'read', result: { type: 'text', value: 's'.repeat(1200) } }],
+    },
+    {
+      id: 'a-ok',
+      role: 'assistant',
+      content: [{ type: 'tool-call', id: 'c-ok', name: 'read', input: { filePath: 'src/ok.ts' } }],
+    },
+    {
+      id: 't-ok',
+      role: 'tool',
+      content: [{ type: 'tool-result', id: 'c-ok', name: 'read', result: { type: 'text', value: 'o'.repeat(1200) } }],
+    },
+    ...makeTail(6),
+  ];
+
+  // Turn 1: directive triggers span collapse
+  const msgs1 = makeFresh();
+  const r1 = pruneContext(
+    { sessionID: 's-dbg02', messages: msgs1 },
+    opts,
+    {
+      allowNewDrops: true,
+      directory: '/proj',
+      pressure: { ratio: 0.5, usableTokens: 20000 },
+      reduceDirectives: [{ scope: 'span', startIndex: 1, endIndex: 4, summary: 'Checked ok.ts', applyNow: true }],
+    },
+  );
+  assert.ok(r1.pruned >= 1);
+  // Signed assistant turn's tool-call c-sig MUST survive intact!
+  const calls1 = msgs1.flatMap((m) => m.content.filter((p: any) => p.type === 'tool-call').map((p: any) => p.id));
+  assert.equal(calls1.includes('c-sig'), true, 'signed-reasoning assistant tool-call must not be stripped');
+  assert.equal(calls1.includes('c-ok'), false, 'unsigned read-only pair should be collapsed');
+
+  // Turn 2: directive is already consumed (no reduceDirectives), ONLY plannedDrops replays -> c-ok MUST stay collapsed (never resurrect)!
+  const msgs2 = makeFresh();
+  const r2 = pruneContext(
+    { sessionID: 's-dbg02', messages: msgs2 },
+    opts,
+    {
+      allowNewDrops: false,
+      plannedDrops: new Set(r1.plannedIds),
+      directory: '/proj',
+      pressure: { ratio: 0.5, usableTokens: 20000 },
+    },
+  );
+  assert.ok(r2.pruned >= 1, 'span collapse must replay from plannedDrops on subsequent turns');
+  const calls2 = msgs2.flatMap((m) => m.content.filter((p: any) => p.type === 'tool-call').map((p: any) => p.id));
+  const results2 = msgs2.flatMap((m) => m.content.filter((p: any) => p.type === 'tool-result').map((p: any) => p.id));
+  assert.equal(calls2.includes('c-ok'), false, 'c-ok must NOT resurrect on replay');
+  assert.equal(results2.includes('c-ok'), false, 'c-ok result must NOT resurrect on replay');
+  assert.deepEqual(calls2, results2, 'strict 1:1 pairing preserved on replay');
+});
+
+test('DBG-03: /trim flush triggers pruning even below pressureStartRatio and rejects oversized sessionID', async () => {
+  let contextHook: any;
+  let rpcHandlers: any;
+  let stepCb: any;
+  const ctx: any = {
+    options: {
+      tui: { enabled: true },
+      pruning: true,
+      protectRecentMessages: 4,
+      protectRecentTokens: 1024,
+      keepRecentToolResults: 1,
+      pruneAfterToolChars: 50000, // well above tool output size
+      pruneMinResultChars: 200,
+      pressureStartRatio: 0.65,
+      prunePreviewLines: 0,
+    },
+    location: { directory: '/proj' },
+    model: { list: async () => [{ providerID: 'p', id: 'm', limit: { context: 40000, output: 4096 } }] },
+    tool: { hook: async () => ({ dispose: async () => {} }) },
+    session: {
+      hook: async (name: string, fn: any) => {
+        if (name === 'context') contextHook = fn;
+        return { dispose: async () => {} };
+      },
+    },
+    rpc: {
+      register: async (_def: any, handlers: any) => {
+        rpcHandlers = handlers;
+        return { dispose: async () => {} };
+      },
+    },
+    event: {
+      subscribe: async () => ({
+        async *[Symbol.asyncIterator]() {
+          await new Promise<void>((resolve) => { stepCb = resolve; });
+        },
+      }),
+    },
+  };
+
+  const cleanup = await setupTrim(ctx);
+  // Reject oversized sessionID (> 512 chars)
+  const bad = await rpcHandlers.flush({ sessionID: 'x'.repeat(600) });
+  assert.equal(bad.queued, false);
+
+  // Queue flush while session is at low pressure (~3% of 200k, below 65% start ratio & below 50k toolChars!)
+  const ok = await rpcHandlers.flush({ sessionID: 's-low-flush' });
+  assert.equal(ok.queued, true);
+
+  const msgs: any[] = [
+    { id: 'a0', role: 'assistant', content: [{ type: 'tool-call', id: 'c0', name: 'shell', input: { command: 'echo old' } }] },
+    { id: 't0', role: 'tool', content: [{ type: 'tool-result', id: 'c0', name: 'shell', result: { type: 'text', value: 'z'.repeat(2000) } }] },
+    { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'shell', input: { command: 'echo keep' } }] },
+    { id: 't1', role: 'tool', content: [{ type: 'tool-result', id: 'c1', name: 'shell', result: { type: 'text', value: 'k'.repeat(1200) } }] },
+    ...makeTail(6),
+  ];
+  await contextHook({ sessionID: 's-low-flush', model: { providerID: 'p', id: 'm' }, system: [], tools: {}, messages: msgs });
+  assert.match(msgs[1].content[0].result.value, /old tool output omitted|opencode-trim: omitted/, 'explicit flush must prune eligible old outputs even below pressureStartRatio');
+
+  if (stepCb) stepCb();
+  await cleanup();
+});
+
+test('DBG-04, DBG-05, DBG-06, DBG-07, DBG-08, DBG-09: relevance reads shell commands, WRITE_NAME & signed-reasoning inputs protected, git diff --stat keeps supKey, compound verification cmds resolve, webfetch virtualizes, store.prune cleans prune_decisions', () => {
+  // DBG-04: scorePruningRelevance reads shell command when no path field exists (pathOf returns ".")
+  const shellHot = scorePruningRelevance(
+    { name: 'shell', input: { command: 'npm test test/auth.test.ts' }, original: 'all ok' },
+    new Set(['auth.test.ts', 'auth']),
+  );
+  const shellCold = scorePruningRelevance(
+    { name: 'shell', input: { command: 'npm test test/billing.test.ts' }, original: 'all ok' },
+    new Set(['auth.test.ts', 'auth']),
+  );
+  assert.ok(shellHot > shellCold, `shellHot (${shellHot}) must exceed shellCold (${shellCold})`);
+
+  // DBG-05: WRITE_NAME tools (e.g. create_record, send_email) must NEVER have inputs pruned by pruneOldToolInputs
+  const opts = parseOptions({
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneAfterToolChars: 10000,
+    pruneMinResultChars: 200,
+    prunePreviewLines: 0,
+  });
+  const bigBody = 'important mutation payload '.repeat(80);
+  const wMsgs: any[] = [
+    { id: 'c1', role: 'assistant', content: [{ type: 'tool-call', id: 'id1', name: 'create_record', input: { body: bigBody } }] },
+    { id: 'r1', role: 'tool', content: [{ type: 'tool-result', id: 'id1', name: 'create_record', result: { type: 'text', value: 'created' } }] },
+    { id: 'c2', role: 'assistant', content: [{ type: 'reasoning', text: 'signed', encrypted: 'enc_1' }, { type: 'tool-call', id: 'id2', name: 'subagent', input: { prompt: bigBody } }] },
+    { id: 'r2', role: 'tool', content: [{ type: 'tool-result', id: 'id2', name: 'subagent', result: { type: 'text', value: 'done' } }] },
+    ...makeTail(6),
+  ];
+  pruneContext({ sessionID: 's-dbg05', messages: wMsgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20000 } });
+  assert.equal(wMsgs[0].content[0].input.body, bigBody, 'WRITE_NAME tool input must never be pruned by pruneOldToolInputs');
+  assert.equal(wMsgs[2].content[1].input.prompt, bigBody, 'signed-reasoning assistant tool-call input must never be mutated');
+
+  // DBG-07: quoted cd path + verification command resolves earlier identical failure
+  const vMsgs: any[] = [
+    { id: 'vf-c', role: 'assistant', content: [{ type: 'tool-call', id: 'cv1', name: 'shell', input: { command: 'cd "/tmp/my app" && npx vitest run' } }] },
+    { id: 'vf-r', role: 'tool', content: [{ type: 'tool-result', id: 'cv1', name: 'shell', result: { type: 'text', value: 'FAIL a.test.ts\n' + 'x'.repeat(500) + '\nProcess exited with code 1' } }] },
+    { id: 'vp-c', role: 'assistant', content: [{ type: 'tool-call', id: 'cv2', name: 'shell', input: { command: 'cd "/tmp/my app" && npx vitest run' } }] },
+    { id: 'vp-r', role: 'tool', content: [{ type: 'tool-result', id: 'cv2', name: 'shell', result: { type: 'text', value: 'all tests passed' } }] },
+    ...makeTail(6),
+  ];
+  pruneContext({ sessionID: 's-dbg07', messages: vMsgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.7, usableTokens: 20000 } });
+  assert.ok(vMsgs[1].content[0].result.value.includes(PRUNED_RESOLVED_ERROR), 'quoted cd + npx vitest run failure should resolve after passing rerun');
+
+  // DBG-08: webfetch huge unstructured output is virtualized into vault in processToolEvent
+  const vOpts = parseOptions({ virtualizeOutputChars: 8000 });
+  const vaulted = new Map<string, any>();
+  const vault = { store: (id: string, e: any) => { vaulted.set(id, e); return true; }, has: (id: string) => vaulted.has(id) };
+  const bigWeb = Array.from({ length: 250 }, (_, i) => `Documentation paragraph ${i} describing API endpoint behavior cleanly.`).join('\n');
+  const webEv: any = { status: 'completed', tool: 'webfetch', sessionID: 's-web', input: { url: 'https://example.com/docs' }, result: { content: bigWeb } };
+  const webChanged = processToolEvent(webEv, vOpts, undefined, { directory: '/proj', sessionID: 's-web', vault });
+  assert.equal(webChanged, true, 'huge webfetch output should virtualize');
+  assert.equal(vaulted.size, 1);
+  assert.match(webEv.result.content, /RECOVERABLE, not lost.*trm_/);
+
+  // DBG-09: store.prune() removes expired rows from prune_decisions
+  const store = openMemoryStore({ dbPath: ':memory:', retentionDays: 1, project: '/proj' });
+  const oldTs = Date.now() - 5 * 86400_000;
+  store.savePruneDecisions('/proj', 's-old', ['d1', 'd2'], oldTs);
+  store.prune('/proj', Date.now());
+  assert.deepEqual(store.loadPruneDecisions('/proj', 's-old', 100, oldTs), [], 'store.prune() must delete expired prune_decisions rows');
+  store.close();
+});
+
+test('DBG-11 & DBG-13: span collapse preserves pruned-char accounting across spliced messages, and env-prefixed mutating linters never resolve as read-only verification', async () => {
+  const { sumPrunedMsgChars } = await import('../src/pressure.ts');
+  const opts = parseOptions({
+    protectRecentMessages: 4,
+    protectRecentTokens: 1024,
+    keepRecentToolResults: 1,
+    pruneAfterToolChars: 10000,
+    pruneMinResultChars: 200,
+    prunePreviewLines: 0,
+  });
+
+  // DBG-11: tool-result pruned by operations AND then spliced by span collapse must keep full pruned-char delta on anchor
+  const msgs: any[] = [
+    { id: 'u0', role: 'user', content: [{ type: 'text', text: 'Inspect big file' }] },
+    { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'read', input: { filePath: 'src/big.ts' } }] },
+    { id: 't1', role: 'tool', content: [{ type: 'tool-result', id: 'c1', name: 'read', result: { type: 'text', value: 'z'.repeat(4000) } }] },
+    { id: 'a2', role: 'assistant', content: [{ type: 'tool-call', id: 'c2', name: 'read', input: { filePath: 'src/keep.ts' } }] },
+    { id: 't2', role: 'tool', content: [{ type: 'tool-result', id: 'c2', name: 'read', result: { type: 'text', value: 'k'.repeat(400) } }] },
+    ...makeTail(6),
+  ];
+  pruneContext(
+    { sessionID: 's-dbg11', messages: msgs },
+    opts,
+    {
+      allowNewDrops: true,
+      directory: '/proj',
+      pressure: { ratio: 0.9, usableTokens: 20000 },
+      reduceDirectives: [{ scope: 'span', startIndex: 1, endIndex: 2, applyNow: true }],
+    },
+  );
+  assert.ok(sumPrunedMsgChars(msgs) >= 3500, `expected transferred pruned chars >= 3500, got ${sumPrunedMsgChars(msgs)}`);
+
+  // DBG-13: NODE_ENV=test eslint --fix is mutating and must NOT resolve an earlier failed run
+  const mMsgs: any[] = [
+    { id: 'mf-c', role: 'assistant', content: [{ type: 'tool-call', id: 'cm1', name: 'shell', input: { command: 'NODE_ENV=test eslint --fix src/' } }] },
+    { id: 'mf-r', role: 'tool', content: [{ type: 'tool-result', id: 'cm1', name: 'shell', result: { type: 'text', value: 'ERROR lint\n' + 'x'.repeat(500) + '\nProcess exited with code 1' } }] },
+    { id: 'mp-c', role: 'assistant', content: [{ type: 'tool-call', id: 'cm2', name: 'shell', input: { command: 'NODE_ENV=test eslint --fix src/' } }] },
+    { id: 'mp-r', role: 'tool', content: [{ type: 'tool-result', id: 'cm2', name: 'shell', result: { type: 'text', value: 'ok' } }] },
+    ...makeTail(6),
+  ];
+  pruneContext({ sessionID: 's-dbg13', messages: mMsgs }, opts, { allowNewDrops: true, pressure: { ratio: 0.9, usableTokens: 20000 } });
+  assert.match(mMsgs[1].content[0].result.value, /ERROR lint/, 'env-prefixed mutating eslint --fix error must never be treated as resolved read-only verification');
+});

@@ -6,6 +6,7 @@ export interface CacheGate {
   allowNewDrops: boolean;
   coldCache: boolean;
   warmCache: boolean;
+  forceFlush?: boolean;
   plannedDrops: Set<string>;
   finish: (ids: Iterable<string>, opts?: { deferred?: boolean }) => void;
 }
@@ -194,7 +195,7 @@ export class ContextCache {
       (entry.sizeMark===undefined||chars>=entry.sizeMark+budget*0.25))allowNewDrops=true;
     if(allowNewDrops&&chars>budget*1.25)entry.sizeMark=chars;
     const persistence=this.#persistence;
-    return {allowNewDrops,coldCache,warmCache,plannedDrops:entry.plannedDrops,
+    return {allowNewDrops,coldCache,warmCache,forceFlush,plannedDrops:entry.plannedDrops,
       finish(ids, finishOpts){
         if(finishOpts?.deferred===true){
           if(crossedStartBand)entry.startBandAdmitted=prevStartBand??false;

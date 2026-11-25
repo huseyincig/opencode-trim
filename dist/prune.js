@@ -10,7 +10,7 @@ import { isProtectedCommand } from "./filters.js";
 import { splitSegments, shellWords, skipPrefixWords } from "./families/util.js";
 import { MAX_LINE, STACK as DIAG_STACK, SUMMARY as DIAG_SUMMARY, ANCHOR as DIAG_ANCHOR, CODE as DIAG_CODE, hasFailureText, parseExitCode } from "./diagnostics.js";
 import { isMeshProtectedPart, verifyMeshMetadata, MESH_SYMBOL, MESH_METADATA_KEY } from "./bridge.js";
-import { recordPrunedMsgChars } from "./pressure.js";
+import { getPrunedMsgChars, recordPrunedMsgChars } from "./pressure.js";
 import { redactSecrets } from "./redact.js";
 /**
  * Economic break-even check for warm prompt-cache invalidation.
@@ -186,7 +186,9 @@ export function scorePruningRelevance(entry, activeTerms) {
     if (!activeTerms || activeTerms.size === 0 || !entry)
         return 0;
     let score = 0;
-    const targetRaw = String(entry.readPath || pathOf(entry.input ?? {}) || data(entry.input, 'command') || data(entry.input, 'pattern') || '')
+    const rawPath = pathOf(entry.input ?? {});
+    const explicitPath = entry.readPath || (rawPath !== '.' ? rawPath : '');
+    const targetRaw = String(explicitPath || data(entry.input, 'command') || data(entry.input, 'pattern') || data(entry.input, 'url') || '')
         .replace(/\\/g, '/')
         .toLowerCase();
     if (targetRaw && targetRaw !== '.') {
@@ -460,7 +462,26 @@ function structured(text) {
         return true;
     return false;
 }
-const REASONING_SIG_KEYS = ['signature', 'thought_signature', 'thoughtSignature', 'encrypted_content', 'redacted_thinking'];
+const REASONING_SIG_KEYS = ['signature', 'thought_signature', 'thoughtSignature', 'encrypted_content', 'encrypted', 'redacted_thinking'];
+function msgHasSignedReasoning(msg) {
+    if (!obj(msg) || trapped(msg))
+        return true;
+    if (hasReasoningSignature(msg))
+        return true;
+    const content = data(msg, 'content');
+    if (!isArr(content))
+        return false;
+    const lim = Math.min(content.length, MAX_PARTS_PER_MESSAGE);
+    for (let i = 0; i < lim; i++) {
+        const p = at(content, i);
+        if (!obj(p))
+            continue;
+        const t = data(p, 'type');
+        if ((t === 'reasoning' || t === 'thinking') && hasReasoningSignature(p))
+            return true;
+    }
+    return false;
+}
 function hasReasoningSignature(part) {
     if (!obj(part) || trapped(part))
         return true;
@@ -1171,10 +1192,88 @@ export function isTrimMeshProtected(part, msg, sessionID) {
     }
     return false;
 }
-const RESOLVED_ERROR_CMD = /^\s*(?:(?:cd\s+\S+\s*&&\s*)?(?:node\s+(?:--(?:import|loader|conditions|no-warnings|experimental-\S+)\s+\S+\s+)*--test|npm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|pnpm\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|bun\s+(?:test|run\s+(?:test|lint|check|typecheck|build))|cargo\s+(?:test|check|build|clippy)|pytest|vitest|jest|tsc|eslint|biome)\b)/i;
-function isResolvableVerificationCmd(input) {
+const VERIFY_RUNNER_DIRECT = new Set(['pytest', 'vitest', 'jest', 'tsc', 'eslint', 'biome', 'ruff']);
+const VERIFY_PKG_MGR = new Set(['npm', 'pnpm', 'bun', 'yarn']);
+const VERIFY_LAUNCHERS = new Set(['npx', 'bunx']);
+function isVerificationSegment(seg) {
+    const trimmed = seg.trim();
+    if (!trimmed)
+        return false;
+    const w = shellWords(trimmed).slice(0, 48);
+    let i = skipPrefixWords(w);
+    if (i >= w.length)
+        return false;
+    const prog = gitBase(w[i]);
+    if (prog === 'cd' || prog === 'pwd')
+        return true;
+    if (mutatingArgs(w.slice(i)))
+        return false;
+    if (VERIFY_RUNNER_DIRECT.has(prog))
+        return true;
+    if (VERIFY_LAUNCHERS.has(prog)) {
+        let j = i + 1;
+        while (j < w.length && w[j].startsWith('-'))
+            j++;
+        return j < w.length && VERIFY_RUNNER_DIRECT.has(gitBase(w[j]));
+    }
+    if (VERIFY_PKG_MGR.has(prog)) {
+        const sub = (w[i + 1] ?? '').toLowerCase();
+        if (sub === 'test')
+            return true;
+        if (sub === 'dlx' || sub === 'exec') {
+            let j = i + 2;
+            while (j < w.length && w[j].startsWith('-'))
+                j++;
+            return j < w.length && VERIFY_RUNNER_DIRECT.has(gitBase(w[j]));
+        }
+        if (sub === 'run' || sub === 'run-script') {
+            const script = (w[i + 2] ?? '').toLowerCase();
+            return /^(?:test|lint|check|typecheck|build)(?:[:_-][a-z0-9_-]+)?$/i.test(script);
+        }
+        return false;
+    }
+    if (prog === 'node') {
+        return w.slice(i + 1).some((t) => t === '--test');
+    }
+    if (prog === 'cargo') {
+        const sub = (w[i + 1] ?? '').toLowerCase();
+        return sub === 'test' || sub === 'check' || sub === 'build' || sub === 'clippy';
+    }
+    if (prog === 'go') {
+        const sub = (w[i + 1] ?? '').toLowerCase();
+        return sub === 'test' || sub === 'vet' || sub === 'build';
+    }
+    return false;
+}
+function verificationKey(input) {
     const cmd = safeString(data(input, 'command')).trim();
-    return !!cmd && RESOLVED_ERROR_CMD.test(cmd);
+    if (!cmd || cmd.length > KEY_MAX || protectedShell(cmd))
+        return '';
+    const stripped = cmd.replace(/(?:^|(?<=\s))(?:[12]>&[12]|[12]?>\s*\/dev\/null)(?=\s|$)/g, ' ').replace(/\$\?/g, '0').trim();
+    if (!stripped || /[><`\r\n\x00]|\$\(|\$\{|\$[A-Za-z_]|(?:^|[^&])&(?:[^&]|$)/.test(stripped))
+        return '';
+    const segments = splitSegments(stripped);
+    if (!segments.length || segments.length > 8)
+        return '';
+    let hasVerify = false;
+    for (const seg of segments) {
+        const w = shellWords(seg.trim()).slice(0, 48);
+        const i = skipPrefixWords(w);
+        if (i >= w.length)
+            return '';
+        const prog = gitBase(w[i]);
+        if (prog === 'cd' || prog === 'pwd')
+            continue;
+        if (!isVerificationSegment(seg))
+            return '';
+        hasVerify = true;
+    }
+    if (!hasVerify)
+        return '';
+    const wd = safeString(data(input, 'workdir')), cw = safeString(data(input, 'cwd'));
+    if (wd.length > KEY_MAX || cw.length > KEY_MAX)
+        return '';
+    return JSON.stringify(['verify', [wd, cw], stripped.replace(/\s+/g, ' ')]);
 }
 const ERROR_INPUT_SKIP = new Set(['path', 'filePath', 'file_path', 'directory', 'id', 'tool', 'name', 'workdir', 'cwd']);
 const WRITE_INPUT_FIELDS = new Set(['content', 'newString', 'oldString', 'patch', 'patchText', 'new_str', 'old_str', 'text', 'code', 'body']);
@@ -1206,7 +1305,9 @@ function collectErrorInputCandidates(call, resultMi, callId, name, opts, out, mi
     }
 }
 function collectOldToolInputCandidates(call, resultMi, callId, name, opts, out) {
-    if (opts.pruneOldToolInputs === false || !call || FILE_WRITE_TOOL.test(name) || SENSITIVE_INPUT_TOOL.test(name))
+    if (opts.pruneOldToolInputs === false || !call || FILE_WRITE_TOOL.test(name) || WRITE_NAME.test(name) || SENSITIVE_INPUT_TOOL.test(name))
+        return;
+    if (msgHasSignedReasoning(call.msg))
         return;
     const inp = call.input;
     if (!obj(inp) || trapped(inp) || touchesInstructionTarget(inp))
@@ -1350,14 +1451,14 @@ function candidates(event, opts, baseDir, ctx) {
                 if (errCall && !isTrimMeshProtected(errCall.part, errCall.msg, event?.sessionID)) {
                     collectErrorInputCandidates(errCall, mi, callId, name, opts, out, opts.pruneMinResultChars);
                 }
-                if (opts.pruneResolvedErrors !== false && (name === 'shell' || name === 'bash') && !trapped(input) && readOnlyCommand(name, input) && isResolvableVerificationCmd(input)) {
-                    const sk = supersessionKey(name, input);
-                    const a = sk ? accessor(part) : null;
+                if (opts.pruneResolvedErrors !== false && (name === 'shell' || name === 'bash') && !trapped(input)) {
+                    const vk = verificationKey(input);
+                    const a = vk ? accessor(part) : null;
                     const errText = a ? a.get() : undefined;
-                    if (sk && a && typeof errText === 'string' && errText.length >= minResChars && !errText.includes(PRUNED_RESOLVED_ERROR) && !structured(errText) && !statusNotice(errText)) {
+                    if (vk && a && typeof errText === 'string' && errText.length >= minResChars && !errText.includes(PRUNED_RESOLVED_ERROR) && !structured(errText) && !statusNotice(errText)) {
                         failedShells.push({
                             id: `reserr:${safeString(callId) || '?'}:${fingerprint(errText)}:${msgId}`,
-                            mi, pi, name, input, accessor: a, length: errText.length, supKey: sk, range: undefined, original: errText, isResolvedError: true,
+                            mi, pi, name, input, accessor: a, length: errText.length, supKey: vk, range: undefined, original: errText, isResolvedError: true,
                         });
                     }
                 }
@@ -1376,7 +1477,7 @@ function candidates(event, opts, baseDir, ctx) {
                         }
                         if (opts.supersedeWrites !== false && wPaths.length > 0 && !touchesInstructionTarget(wInput)) {
                             const wCall = call ?? (type === 'tool' ? { name, input: wInput, mi, pi, msgId, part, msg } : null);
-                            if (wCall)
+                            if (wCall && !msgHasSignedReasoning(wCall.msg))
                                 writeCalls.push({ call: wCall, resultMi: mi, resultPi: pi, callId, name, paths: wPaths, scope });
                         }
                     }
@@ -1396,12 +1497,12 @@ function candidates(event, opts, baseDir, ctx) {
                     collectOldToolInputCandidates(okCall, mi, callId, name, opts, out);
                 }
             }
-            // Track passing read-only/test/build shell runs to resolve earlier identical failures
-            if (role !== 'user' && (name === 'shell' || name === 'bash') && !failure(part) && (type !== 'tool' || data(data(part, 'state'), 'status') === 'completed') && !trapped(input) && readOnlyCommand(name, input)) {
-                const sk = supersessionKey(name, input);
-                const texts = resultTexts(part);
-                if (sk && !texts.some((t) => diagnosticText(t))) {
-                    passedShellLatest.set(sk, mi);
+            // Track passing verification shell runs to resolve earlier identical failures
+            if (role !== 'user' && (name === 'shell' || name === 'bash') && !failure(part) && (type !== 'tool' || data(data(part, 'state'), 'status') === 'completed') && !trapped(input)) {
+                const vk = verificationKey(input);
+                const texts = vk ? resultTexts(part) : [];
+                if (vk && !texts.some((t) => diagnosticText(t))) {
+                    passedShellLatest.set(vk, mi);
                 }
             }
             if (role === 'user' || !eligibleTool(name, opts) || failure(part))
@@ -1412,12 +1513,14 @@ function candidates(event, opts, baseDir, ctx) {
                 continue;
             if (isLiveDiskTool(name) && touchesInstructionTarget(input))
                 continue;
-            const agedDiff = (name === 'shell' || name === 'bash') && allowAgedDiffs && mi < agedDiffCutoff && isAgedReadOnlyDiff(data(input, 'command'));
-            if (!agedDiff && !readOnlyCommand(name, input))
+            const ro = readOnlyCommand(name, input);
+            const agedDiff = !ro && (name === 'shell' || name === 'bash') && allowAgedDiffs && mi < agedDiffCutoff && isAgedReadOnlyDiff(data(input, 'command'));
+            if (!ro && !agedDiff)
                 continue;
-            if (type === 'tool-result' && call && !agedDiff) {
+            if (type === 'tool-result' && call && ro && !msgHasSignedReasoning(call.msg)) {
                 const rawT = data(input, 'filePath') ?? data(input, 'path') ?? data(input, 'command') ?? data(input, 'pattern') ?? '';
                 pairedReadOnly.push({
+                    spanKey: `spanpair:${safeString(callId) || '?'}:${call.msgId}:${msgId}`,
                     callMi: call.mi, callPi: call.pi, callPart: call.part, resMi: mi, resPi: pi, resPart: part,
                     name, target: typeof rawT === 'string' ? rawT.slice(0, 48) : '',
                 });
@@ -1464,9 +1567,12 @@ function candidates(event, opts, baseDir, ctx) {
     }
     return { entries: out, fileWrites, pairedReadOnly };
 }
-function collapseSpanPairs(messages, pairedReadOnly, directives, tail, tokenTail) {
+function collapseSpanPairs(messages, pairedReadOnly, directives, plannedDrops, newDrops, tail, tokenTail) {
     const spanDirs = directives.filter((d) => d.scope === 'span');
-    if (!spanDirs.length || !pairedReadOnly.length)
+    const hasReplays = pairedReadOnly.some((p) => plannedDrops.has(p.spanKey));
+    if ((!spanDirs.length || !newDrops) && !hasReplays)
+        return { collapsed: 0, removedChars: 0, ids: [] };
+    if (!pairedReadOnly.length)
         return { collapsed: 0, removedChars: 0, ids: [] };
     const safeLimit = Math.min(tail, tokenTail);
     if (safeLimit <= 0)
@@ -1478,48 +1584,58 @@ function collapseSpanPairs(messages, pairedReadOnly, directives, tail, tokenTail
     let removedChars = 0;
     let firstAnchorMi = Infinity;
     let chosenSummary = '';
-    for (const d of spanDirs) {
-        const lo = typeof d.startIndex === 'number' && Number.isInteger(d.startIndex) && d.startIndex >= 0 ? d.startIndex : 0;
-        const hi = typeof d.endIndex === 'number' && Number.isInteger(d.endIndex) && d.endIndex >= lo ? Math.min(safeLimit - 1, d.endIndex) : safeLimit - 1;
-        if (lo > hi)
-            continue;
-        if (typeof d.summary === 'string' && d.summary.trim() && !chosenSummary) {
-            chosenSummary = redactSecrets(d.summary.trim().replace(/\s+/g, ' ')).slice(0, 800);
+    const selectPair = (pair) => {
+        if (pair.callMi >= safeLimit || pair.resMi >= safeLimit)
+            return;
+        const callMsg = at(messages, pair.callMi);
+        const resMsg = at(messages, pair.resMi);
+        const callArr = data(callMsg, 'content');
+        const resArr = data(resMsg, 'content');
+        if (!isArr(callArr) || !isArr(resArr) || !writable(callMsg, 'content') || !writable(resMsg, 'content'))
+            return;
+        let cSet = removeByMsg.get(pair.callMi);
+        if (!cSet) {
+            cSet = new Set();
+            removeByMsg.set(pair.callMi, cSet);
         }
-        for (const pair of pairedReadOnly) {
-            if (pair.callMi < lo || pair.callMi > hi || pair.resMi < lo || pair.resMi > hi)
+        let rSet = removeByMsg.get(pair.resMi);
+        if (!rSet) {
+            rSet = new Set();
+            removeByMsg.set(pair.resMi, rSet);
+        }
+        if (cSet.has(pair.callPart))
+            return;
+        cSet.add(pair.callPart);
+        rSet.add(pair.resPart);
+        collapsed++;
+        if (pair.callMi < firstAnchorMi)
+            firstAnchorMi = pair.callMi;
+        removedTargets.push(pair.target ? `${pair.name}(${pair.target})` : pair.name);
+        collapsedIds.push(pair.spanKey);
+        try {
+            removedChars += JSON.stringify(pair.callPart).length + JSON.stringify(pair.resPart).length;
+        }
+        catch { }
+    };
+    // Always replay already-committed span collapses stably so collapsed turns never resurrect.
+    for (const pair of pairedReadOnly) {
+        if (plannedDrops.has(pair.spanKey))
+            selectPair(pair);
+    }
+    if (newDrops) {
+        for (const d of spanDirs) {
+            const lo = typeof d.startIndex === 'number' && Number.isInteger(d.startIndex) && d.startIndex >= 0 ? d.startIndex : 0;
+            const hi = typeof d.endIndex === 'number' && Number.isInteger(d.endIndex) && d.endIndex >= lo ? Math.min(safeLimit - 1, d.endIndex) : safeLimit - 1;
+            if (lo > hi)
                 continue;
-            if (pair.callMi >= safeLimit || pair.resMi >= safeLimit)
-                continue;
-            const callMsg = at(messages, pair.callMi);
-            const resMsg = at(messages, pair.resMi);
-            const callArr = data(callMsg, 'content');
-            const resArr = data(resMsg, 'content');
-            if (!isArr(callArr) || !isArr(resArr) || !writable(callMsg, 'content') || !writable(resMsg, 'content'))
-                continue;
-            let cSet = removeByMsg.get(pair.callMi);
-            if (!cSet) {
-                cSet = new Set();
-                removeByMsg.set(pair.callMi, cSet);
+            if (typeof d.summary === 'string' && d.summary.trim() && !chosenSummary) {
+                chosenSummary = redactSecrets(d.summary.trim().replace(/\s+/g, ' ')).slice(0, 800);
             }
-            let rSet = removeByMsg.get(pair.resMi);
-            if (!rSet) {
-                rSet = new Set();
-                removeByMsg.set(pair.resMi, rSet);
+            for (const pair of pairedReadOnly) {
+                if (pair.callMi < lo || pair.callMi > hi || pair.resMi < lo || pair.resMi > hi)
+                    continue;
+                selectPair(pair);
             }
-            if (cSet.has(pair.callPart))
-                continue;
-            cSet.add(pair.callPart);
-            rSet.add(pair.resPart);
-            collapsed++;
-            if (pair.callMi < firstAnchorMi)
-                firstAnchorMi = pair.callMi;
-            removedTargets.push(pair.target ? `${pair.name}(${pair.target})` : pair.name);
-            collapsedIds.push(`span:${pair.callMi}:${pair.resMi}:${pair.name}`);
-            try {
-                removedChars += JSON.stringify(pair.callPart).length + JSON.stringify(pair.resPart).length;
-            }
-            catch { }
         }
     }
     if (!collapsed)
@@ -1529,29 +1645,79 @@ function collapseSpanPairs(messages, pairedReadOnly, directives, tail, tokenTail
         ? `[opencode-trim: collapsed ${collapsed} read-only tool step${collapsed === 1 ? '' : 's'} (untrusted historical summary): ${chosenSummary}]`
         : `[opencode-trim: collapsed ${collapsed} read-only tool step${collapsed === 1 ? '' : 's'}: ${sample}]`;
     removedChars = Math.max(0, removedChars - summaryNote.length);
+    // Snapshot for atomic rollback if any message or array mutation fails.
+    const origMessages = messages.slice();
+    const origContents = new Map();
     const emptyIndices = new Set();
-    for (const [mi, partSet] of removeByMsg.entries()) {
-        const msg = at(messages, mi);
-        const prev = data(msg, 'content');
-        if (!isArr(prev))
-            continue;
-        const next = prev.filter((p) => !partSet.has(p));
-        if (mi === firstAnchorMi) {
-            next.push({ type: 'text', text: summaryNote });
-            msg.content = next;
+    try {
+        for (const [mi, partSet] of removeByMsg.entries()) {
+            const msg = at(messages, mi);
+            const prev = data(msg, 'content');
+            if (!isArr(prev))
+                continue;
+            origContents.set(mi, prev);
+            const next = prev.filter((p) => !partSet.has(p));
+            if (mi === firstAnchorMi) {
+                next.push({ type: 'text', text: summaryNote });
+                msg.content = next;
+            }
+            else if (next.length === 0) {
+                emptyIndices.add(mi);
+            }
+            else {
+                msg.content = next;
+            }
         }
-        else if (next.length === 0) {
-            emptyIndices.add(mi);
+        // Preserve provider role alternation: if removing an empty assistant turn would leave
+        // two adjacent user turns, keep a minimal breadcrumb instead of splicing it out.
+        for (const mi of [...emptyIndices]) {
+            const msg = at(messages, mi);
+            const role = data(msg, 'role') ?? data(msg, 'type');
+            if (role !== 'assistant')
+                continue;
+            let prevRole, nextRole;
+            for (let i = mi - 1; i >= 0; i--) {
+                if (!emptyIndices.has(i)) {
+                    prevRole = data(at(messages, i), 'role') ?? data(at(messages, i), 'type');
+                    break;
+                }
+            }
+            for (let i = mi + 1; i < messages.length; i++) {
+                if (!emptyIndices.has(i)) {
+                    nextRole = data(at(messages, i), 'role') ?? data(at(messages, i), 'type');
+                    break;
+                }
+            }
+            if (prevRole === 'user' && nextRole === 'user') {
+                emptyIndices.delete(mi);
+                msg.content = [{ type: 'text', text: '[opencode-trim: collapsed read-only tool step]' }];
+            }
         }
-        else {
-            msg.content = next;
+        const anchorMsg = at(messages, firstAnchorMi);
+        let transferredChars = 0;
+        if (emptyIndices.size > 0) {
+            for (let i = messages.length - 1; i >= 0; i--) {
+                if (emptyIndices.has(i)) {
+                    transferredChars += getPrunedMsgChars(at(messages, i));
+                    messages.splice(i, 1);
+                }
+            }
         }
+        if (anchorMsg && removedChars + transferredChars > 0)
+            recordPrunedMsgChars(anchorMsg, removedChars + transferredChars);
     }
-    if (emptyIndices.size > 0) {
-        for (let i = messages.length - 1; i >= 0; i--) {
-            if (emptyIndices.has(i))
-                messages.splice(i, 1);
+    catch (cause) {
+        messages.length = 0;
+        messages.push(...origMessages);
+        for (const [mi, prev] of origContents.entries()) {
+            try {
+                const msg = at(messages, mi);
+                if (obj(msg))
+                    msg.content = prev;
+            }
+            catch { }
         }
+        throw cause;
     }
     return { collapsed, removedChars, ids: collapsedIds };
 }
@@ -1602,8 +1768,9 @@ export function pruneContext(event, options, settings = {}) {
     const total = resultEntries.reduce((sum, e) => sum + e.length, 0);
     const plannedDrops = settings.plannedDrops instanceof Set ? settings.plannedDrops : new Set();
     const newDrops = settings.allowNewDrops !== false;
+    const forceFlush = settings.forceFlush === true;
     const dueToSize = total > options.pruneAfterToolChars * 1.25;
-    const dueToPressure = normalizedRatio >= options.pressureStartRatio && !settings.pressure?.mediaPresent;
+    const dueToPressure = (normalizedRatio >= options.pressureStartRatio && !settings.pressure?.mediaPresent) || forceFlush;
     // Supersession needs coverage evidence, not merely a similar path or command.
     const groups = new Map();
     for (const e of resultEntries) {
@@ -1689,7 +1856,7 @@ export function pruneContext(event, options, settings = {}) {
     }
     const hasDirectiveTargets = directiveIds.size > 0 || hasSpanDirective;
     const canReclaim = newDrops && (dueToSize || dueToPressure || dueToSupersession || errorInputs.length > 0 || supersededWrites.length > 0 || resolvedErrors.length > 0 || reasoningEntries.length > 0 || hasDirectiveTargets);
-    const target = critical ? Math.floor(options.pruneAfterToolChars * 0.4) : force ? Math.floor(options.pruneAfterToolChars * 0.6) :
+    const target = forceFlush ? 0 : critical ? Math.floor(options.pruneAfterToolChars * 0.4) : force ? Math.floor(options.pruneAfterToolChars * 0.6) :
         Math.floor(options.pruneAfterToolChars * 0.8);
     const supersededSet = new Set(superseded.map(e => e.id));
     // Zero-LLM local semantic relevance ranking: prune cold/unrelated sub-task outputs before active-task outputs.
@@ -1858,11 +2025,8 @@ export function pruneContext(event, options, settings = {}) {
         }
         throw cause;
     }
-    let spanRes = { collapsed: 0, removedChars: 0, ids: [] };
-    if (hasSpanDirective && newDrops) {
-        spanRes = collapseSpanPairs(event.messages, pairedReadOnly, directives, tail, tokenTail);
-        removedChars += spanRes.removedChars;
-    }
+    const spanRes = collapseSpanPairs(event.messages, pairedReadOnly, directives, plannedDrops, newDrops, tail, tokenTail);
+    removedChars += spanRes.removedChars;
     const totalPruned = committed.length + spanRes.collapsed;
     const reason = totalPruned ? 'pruned' : (!newDrops || warmCacheDeferred) ? 'cache-deferred' :
         !(dueToSize || dueToPressure || dueToSupersession || errorInputs.length > 0 || supersededWrites.length > 0 || resolvedErrors.length > 0 || reasoningEntries.length > 0 || hasDirectiveTargets) ? 'below-pressure' : 'no-safe-target';

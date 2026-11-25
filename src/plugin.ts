@@ -401,8 +401,13 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
     }
     return applied;
   }
+  const isWebFetch=event?.tool==='webfetch';
+  const virtThreshold=typeof options.virtualizeOutputChars==='number'&&Number.isSafeInteger(options.virtualizeOutputChars)?options.virtualizeOutputChars:0;
+  const virtVault=runtime?.vault&&typeof runtime.vault.store==='function'&&typeof runtime.vault.has==='function'?runtime.vault:null;
   if(isRead){
     if(!options.toolFiltering||typeof dir!=='string'||!dir)return false;
+  } else if(isWebFetch){
+    if(!options.toolFiltering||virtThreshold<=0||!virtVault)return false;
   } else if(shell ? !options.shell : !options.toolFiltering || !LIST_TOOLS.has(event?.tool)) return false;
   const result=event.result;
   if(!obj(result))return false;
@@ -430,6 +435,7 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
       const compacted=compactReadEnvelope(text,dir);
       return {text:compacted,changed:compacted!==text};
     }
+    if(isWebFetch)return {text,changed:false};
     if(shell)return compressOutput({command,text,exitCode:code,options,externalFailureNotice:noticePresent});
     const pathed=compactListPaths(text,dir,options);
     const baseText=pathed.changed?pathed.text:text;
@@ -498,8 +504,6 @@ export function processToolEvent(event: any, options: any, sink?: (info: any) =>
       }
     }
   }
-  const virtThreshold=typeof options.virtualizeOutputChars==='number'&&Number.isSafeInteger(options.virtualizeOutputChars)?options.virtualizeOutputChars:0;
-  const virtVault=runtime?.vault&&typeof runtime.vault.store==='function'&&typeof runtime.vault.has==='function'?runtime.vault:null;
   if(!usedDedupeStub&&!isRead&&virtThreshold>0&&virtVault&&event?.codemode!==true&&(!shell||code===undefined||code===0)&&!primaryNoticePresent&&primaryRaw!==null&&primaryFinal!==null&&primaryFinal.length>=virtThreshold&&!isLiveDiskOutput(event.tool,event.input)&&(!shell||!isProtectedCommand(command))){
     const strippedRaw=primaryRaw.includes('\x1b')?stripAnsi(primaryRaw):primaryRaw;
     const strippedFinal=primaryFinal===primaryRaw?strippedRaw:(primaryFinal.includes('\x1b')?stripAnsi(primaryFinal):primaryFinal);
@@ -926,8 +930,9 @@ export async function setupTrim(ctx: any): Promise<() => Promise<void>> {
         rpcReg=await ctx.rpc.register(TRIM_STATS_RPC,{
           snapshot:async(input: any)=>stats.snapshot(input?.sessionID),
           flush:async(input: any)=>{
-            const sid=typeof input?.sessionID==='string'&&input.sessionID?input.sessionID:'';
-            const queued=sid&&opts.pruning?cache.requestFlush(sid):false;
+            const rawSid=typeof input?.sessionID==='string'?input.sessionID:'';
+            const sid=rawSid&&rawSid.length<=512?rawSid:'';
+            const queued=!!(sid&&opts.pruning&&cache.requestFlush(sid));
             return {queued,sessionID:sid};
           },
         });

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.1 — 2026-11-25
+
+- **Full Debug & Hardening Pass (`src/prune.ts`, `src/cache.ts`, `src/plugin.ts`, `src/memory-store.ts`)**:
+  - **OpenCode V2 Encrypted Reasoning Protection (`DBG-01`):** Added `'encrypted'` (`@opencode/ai` `ReasoningPart.encrypted`) to `REASONING_SIG_KEYS` and added `msgHasSignedReasoning(msg)` so encrypted/signed reasoning blocks and their owning assistant tool-call turns are never mutated or stripped.
+  - **Stable Span Collapse Replay, Alternation & Rollback (`DBG-02`, `DBG-11`):** Keyed span collapses stably (`spanpair:<callId>:<callMsgId>:<resMsgId>`) so committed span collapses replay deterministically from `plannedDrops` across turns without resurrecting; wrapped mutations in atomic snapshot/rollback; preserved provider role alternation when removing empty assistant turns; transferred `getPrunedMsgChars` from spliced-out messages onto the anchor message for accurate `sumPrunedMsgChars` accounting.
+  - **Unconditional `/trim flush` & RPC Input Bounds (`DBG-03`):** Propagated `forceFlush: boolean` through `CacheGate` into `pruneContext()` so explicit `/trim flush` sweeps eligible older outputs even below `pressureStartRatio` / `pruneAfterToolChars`, and enforced `sessionID.length <= 512` in the server `flush` RPC handler.
+  - **Relevance Scoring, Write-Input & Diff Safety (`DBG-04`, `DBG-05`, `DBG-06`):** Fixed `scorePruningRelevance()` so `shell` commands and `grep` patterns are no longer shadowed by `pathOf()` returning `"."`; excluded all `WRITE_NAME` mutating tools and signed-reasoning assistant turns from `collectOldToolInputCandidates()`; kept normal `readOnlyCommand()` (`git diff --stat`) supersession keys intact instead of misclassifying them as `agedDiff`.
+  - **Segment-Aware Verification Command Resolver (`DBG-07`, `DBG-13`):** Replaced regex matching with `splitSegments`/`shellWords`/`skipPrefixWords` + `mutatingArgs(w.slice(i))` so quoted `cd` chains, env-prefixed runners, `npx`/`bunx`/`go test` verification commands resolve accurately while env-prefixed mutating linters (e.g. `NODE_ENV=test eslint --fix`) are rejected.
+  - **`webfetch` Virtualization & `prune_decisions` Retention Cleanup (`DBG-08`, `DBG-09`):** Enabled selective ingestion virtualization (`virtualizeOutputChars`) for huge unstructured `webfetch` outputs alongside `shell`, and added `dropsPruneStmt` retention pruning inside `store.prune()`.
+- **Verification:** **`577 / 577`** tests passing across 31 suites (`npm run check` — strict `tsc --noEmit`, `dist/` build, 96-file syntax check, 14 tests in `test/deep-pruning.test.ts`), zero circular imports across 47 source files, isolated packed tarball verified on Node 26, `npm run bench` passing.
+
 ## 0.12.0 — 2026-11-25
 
 - **Superseded Write & Aged Oversized Tool-Call Input Pruning (`src/prune.ts`, `src/config.ts`)**:

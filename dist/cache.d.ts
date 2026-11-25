@@ -5,6 +5,7 @@ export interface CacheGate {
     allowNewDrops: boolean;
     coldCache: boolean;
     warmCache: boolean;
+    forceFlush?: boolean;
     plannedDrops: Set<string>;
     finish: (ids: Iterable<string>, opts?: {
         deferred?: boolean;

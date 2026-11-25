@@ -203,7 +203,7 @@ export class ContextCache {
         if (allowNewDrops && chars > budget * 1.25)
             entry.sizeMark = chars;
         const persistence = this.#persistence;
-        return { allowNewDrops, coldCache, warmCache, plannedDrops: entry.plannedDrops,
+        return { allowNewDrops, coldCache, warmCache, forceFlush, plannedDrops: entry.plannedDrops,
             finish(ids, finishOpts) {
                 if (finishOpts?.deferred === true) {
                     if (crossedStartBand)

@@ -1097,6 +1097,7 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
             const cutoff = Number(now) - retentionMs;
             const res = pruneStmt.run(cutoff, pruneProject);
             vaultPruneStmt.run(cutoff, pruneProject);
+            dropsPruneStmt.run(cutoff, pruneProject);
             return { deleted: Number(res.changes) };
         },
         saveVault(record) {
