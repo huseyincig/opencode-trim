@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.5 — 2026-11-26
+
+- **Accurate Compaction-Before Telemetry (`src/memory.ts`)**:
+  - **Root Cause:** On `session.compaction.started`, `contextTokens()` estimated the unpruned persisted DB transcript returned by `ctx.session.context()` via `bytes / 3`, recording inflated `history.context_before_tokens` values (e.g. `500k–731k` instead of the real `~250k` provider context).
+  - **Fix:** Added `nativeTokensFromContext()` in `src/memory.ts` so `context_before_tokens` prefers the real provider `input + cache.read` token count from the last assistant message after the last completed compaction (falling back to `estimateRequest` only when no assistant token bag is present), while post-compaction `context_after_tokens` continues to measure the actual post-compaction outgoing wire request (never misreading stale pre-compaction tokens on kept messages).
+- **Verification:** **`589 / 589`** tests passing across 32 suites (`npm run check` — strict `tsc --noEmit`, `dist/` build, 96-file syntax check, new `BUG-08` regression test in `test/production-audit-fixes.test.ts`).
+
 ## 0.12.4 — 2026-11-26
 
 - **Critical Fix: Restrict `autoCompact` Strictly to Main/Root Sessions (`src/plugin.ts`, `src/memory.ts`)**:

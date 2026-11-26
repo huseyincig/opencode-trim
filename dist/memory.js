@@ -25,10 +25,44 @@ function validReg(r) {
 }
 function pick(...vals) { return vals.find(v => v !== undefined && v !== null); }
 function sessionOf(e) { const p = payload(e); const s = pick(p.sessionID, e?.sessionID); return typeof s === 'string' && s ? s : undefined; }
-/** Estimated model-visible tokens of a session context; never throws. */
+/** Last assistant message real provider tokens (input + cache.read) after the last completed compaction. */
+function nativeTokensFromContext(c) {
+    const list = Array.isArray(c) ? c : Array.isArray(c?.messages) ? c.messages : null;
+    if (!list || !list.length)
+        return undefined;
+    const lim = Math.min(list.length, MAX_MESSAGES);
+    let start = 0;
+    for (let i = lim - 1; i >= 0; i--) {
+        const m = list[i];
+        if (obj(m) && m.type === 'compaction' && m.status === 'completed') {
+            start = i + 1;
+            break;
+        }
+    }
+    for (let i = lim - 1; i >= start; i--) {
+        const m = list[i];
+        if (!obj(m))
+            continue;
+        const role = m.type ?? m.role ?? m.info?.role;
+        if (role !== 'assistant')
+            continue;
+        const t = obj(m.tokens) ? m.tokens : obj(m.info?.tokens) ? m.info.tokens : undefined;
+        if (!t)
+            continue;
+        const input = typeof t.input === 'number' && Number.isFinite(t.input) && t.input >= 0 ? t.input : undefined;
+        if (input === undefined)
+            continue;
+        const read = obj(t.cache) && typeof t.cache.read === 'number' && Number.isFinite(t.cache.read) ? Math.max(0, t.cache.read) : 0;
+        const total = Math.trunc(input + read);
+        if (total > 0)
+            return total;
+    }
+    return undefined;
+}
+/** Estimated model-visible tokens of a session context; prefers real provider tokens when available; never throws. */
 async function contextTokens(ctx, sessionID) {
     try {
-        return estimateContext(await ctx.session.context({ sessionID }));
+        return estimateContext(await ctx.session.context({ sessionID }), { preferNative: true });
     }
     catch {
         return undefined;
@@ -84,10 +118,15 @@ function textChars(root) {
     walk(root, 0);
     return Math.max(0, FALLBACK_CHARS - Math.max(0, budget.left));
 }
-function estimateContext(c) {
+function estimateContext(c, opts) {
     try {
         if (!Array.isArray(c) && !obj(c))
             return undefined;
+        if (opts?.preferNative === true) {
+            const native = nativeTokensFromContext(c);
+            if (native !== undefined)
+                return native;
+        }
         const req = Array.isArray(c)
             ? { messages: normalizeMessages(c), system: [], tools: {} }
             : { ...c, messages: Array.isArray(c.messages) ? normalizeMessages(c.messages) : c.messages };

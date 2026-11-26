@@ -4,8 +4,13 @@ import { parseOptions, DEFAULTS } from '../src/config.ts';
 import { estimateRequest } from '../src/pressure.ts';
 import { pruneContext, PRUNED, PRUNED_OLD_INPUT, isLiveDiskOutput } from '../src/prune.ts';
 import { setupTrim } from '../src/plugin.ts';
+import { setupMemory } from '../src/memory.ts';
 import { ContextCache } from '../src/cache.ts';
 import { messageBreakdown } from '../src/tui-model.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function makeTail(count = 6) {
   return Array.from({ length: count }, (_, i) => ({
@@ -413,6 +418,84 @@ test('BUG-07: autoCompact runs ONLY on root/main sessions and never leaks into w
   assert.equal(r6.compactCalls.length, 1, 'confirmed main/root session must still autoCompact');
   assert.equal(r6.compactCalls[0].sessionID, 'main-1');
   assert.equal(r6.getCalls, 1, 'session.get checked cleanly');
+});
+
+test('BUG-08: memory context_before_tokens prefers real last assistant (input + cache.read) after last completed compaction, while context_after_tokens measures actual post-compaction wire request', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trim-bug08-'));
+  const dbPath = join(dir, 'memory.db');
+  try {
+    let contextCb: any;
+    const queue: any[] = [];
+    let wake: any;
+    let done = false;
+    const hugeUnpruned = 'raw unpruned tool output line\n'.repeat(60_000); // ~1.8M chars -> ~600k bytes/3
+    const ctx: any = {
+      location: { directory: dir },
+      tool: {
+        hook: async () => ({ dispose: async () => {} }),
+        transform: async () => ({ dispose: async () => {} }),
+      },
+      session: {
+        hook: async (name: string, fn: any) => { if (name === 'context') contextCb = fn; return { dispose: async () => {} }; },
+        context: async () => [
+          // Pre-earlier-compaction message with old huge tokens (must be ignored because completed compaction follows)
+          { id: 'old-a', type: 'assistant', tokens: { input: 50_000, cache: { read: 400_000, write: 0 } }, text: 'old' },
+          { id: 'prev-c', type: 'compaction', status: 'completed' },
+          // Current window has huge raw unpruned DB text, but real provider token count on last assistant step was 248,500
+          { id: 'u1', type: 'user', text: hugeUnpruned },
+          { id: 'a-last', type: 'assistant', tokens: { input: 8_500, output: 400, cache: { read: 240_000, write: 0 } }, text: 'working' },
+        ],
+      },
+      event: {
+        subscribe: async (args: any) => {
+          args.signal?.addEventListener('abort', () => { done = true; wake?.(); });
+          return (async function* () { while (!done) { if (queue.length) yield queue.shift(); else await new Promise((r) => { wake = r; }); } })();
+        },
+      },
+    };
+
+    const opts = parseOptions({ memory: { enabled: true, dbPath, retentionDays: 30 } });
+    const stop = await setupMemory(ctx, opts);
+
+    queue.push({ type: 'session.compaction.started', data: { sessionID: 's-mem-tok', location: { directory: dir } } });
+    queue.push({
+      type: 'session.compaction.ended',
+      data: {
+        eventID: 'ev-bug08',
+        sessionID: 's-mem-tok',
+        reason: 'manual',
+        text: '## Objective\nVerify accurate native context_before_tokens telemetry.',
+        location: { directory: dir },
+      },
+    });
+    wake?.();
+    await new Promise((r) => setTimeout(r, 40));
+
+    // Next context turn after compaction: compact summary + a kept message carrying stale pre-compaction tokens (must NOT be misread as after)
+    await contextCb({
+      sessionID: 's-mem-tok',
+      location: { directory: dir },
+      system: [{ type: 'text', text: 'system prompt' }],
+      tools: {},
+      messages: [
+        { id: 'sum-1', role: 'user', content: [{ type: 'text', text: 'Compacted summary: ' + 's'.repeat(6000) }] },
+        { id: 'kept-a', role: 'assistant', tokens: { input: 8_500, cache: { read: 240_000 } }, content: [{ type: 'text', text: 'kept tail' }] },
+      ],
+    });
+    await stop();
+
+    const db = new DatabaseSync(dbPath, { open: true, readOnly: true });
+    const row: any = db.prepare("SELECT context_before_tokens, context_after_tokens FROM history WHERE event_id = 'ev-bug08'").get();
+    db.close();
+
+    assert.equal(row.context_before_tokens, 248_500, `context_before_tokens must use real provider input+cache.read (248500), got ${row.context_before_tokens}`);
+    assert.ok(
+      row.context_after_tokens > 1_500 && row.context_after_tokens < 10_000,
+      `context_after_tokens must measure actual post-compaction wire request (~2k), not stale kept tokens (248500), got ${row.context_after_tokens}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('BUG-06: read-only ephemeral status/watch tools and git ls-files are eligible for pruning and archived (not live-disk)', () => {
