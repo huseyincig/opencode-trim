@@ -6,9 +6,13 @@ import { redactSecrets, stripRedactedAssignments } from './redact.ts';
 
 export { redactSecrets };
 
+export const VAULT_REF_PATTERN = /^trm_[0-9a-f]{32}$/;
+const VAULT_REF_PREFIX_PATTERN = /^trm_[A-Za-z0-9_-]{1,124}$/;
+
 export interface VaultLookupResult {
   found: boolean;
   id: string;
+  reason?: 'invalid_ref_format' | 'missing_or_expired';
   mode?: 'item' | 'list' | 'search';
   tool?: string | null;
   target?: string | null;
@@ -1228,7 +1232,20 @@ export function openMemoryStore({
       if (closed) throw new Error('store closed');
       const id = typeof refId === 'string' ? refId.trim().slice(0, 128) : '';
       if (typeof vaultProject !== 'string' || !vaultProject || !id) {
-        return { found: false, id, text: `[opencode-trim: omitted tool output unavailable — invalid or missing ref "${id}".]` };
+        return {
+          found: false,
+          id,
+          reason: 'invalid_ref_format',
+          text: `[opencode-trim: invalid vault ref "${id}" — expected an opencode-trim vault ref ("trm_<32 hex>").]`,
+        };
+      }
+      if (!VAULT_REF_PREFIX_PATTERN.test(id)) {
+        return {
+          found: false,
+          id,
+          reason: 'invalid_ref_format',
+          text: `[opencode-trim: invalid vault ref "${id}" — trim_expand only accepts "trm_<32 hex>" refs emitted by opencode-trim notices. If "${id}" is an external background task/job/process ID or file path, use that tool's own status/read tool instead; to search cached vault outputs, call trim_expand without \`id\` using \`grep\`, \`target\`, or empty args to list refs.]`,
+        };
       }
       const rawGrep = typeof grep === 'string' && grep.trim() ? grep.trim() : null;
       const rx = rawGrep && regex === true ? compileSafeGrepRegex(rawGrep, caseSensitive === true) : null;
@@ -1239,6 +1256,7 @@ export function openMemoryStore({
         return {
           found: false,
           id,
+          reason: 'missing_or_expired',
           text: `[opencode-trim: omitted tool output unavailable — cached original for ref "${id}" expired or was cleared. Rerun the source tool to reproduce it.]`,
         };
       }

@@ -344,11 +344,11 @@ export async function setupMemory(ctx, opts, hooks) {
         regs.push(validReg(await ctx.tool.transform((editor) => {
             editor.add({
                 name: EXPAND_TOOL_NAME,
-                description: 'Recover, slice, or search EPHEMERAL pruned command/web outputs (such as shell, bash, or webfetch logs) cached by opencode-trim in the project vault. NEVER use trim_expand to read or search live source files on disk — always use your live file/code tools for source code, as vault entries are point-in-time historical snapshots that may be stale. Pass `id` (e.g. "trm_...") with optional startLine/endLine/grep to inspect a cached output; omit `id` and pass `grep` to search cached command/web outputs; or omit both to list recent cached refs.',
+                description: 'Recover, slice, or search EPHEMERAL pruned command/web outputs (such as shell or web fetch logs) archived by opencode-trim in the project vault. Pass `id` ONLY with an exact "trm_<32 hex>" ref printed in an `[opencode-trim: ...]` notice or returned by `trim_expand({})` list/search mode. NEVER pass external background task/job/process IDs (use that tool\'s own status/output tool instead) and NEVER use trim_expand to read or search live source files on disk (always use live file/code tools, as vault entries are point-in-time historical snapshots that may be stale). Omit `id` and pass `grep`/`target`/`tool` to search cached vault outputs, or omit both to list recent cached refs.',
                 input: {
                     type: 'object',
                     properties: {
-                        id: { type: 'string', minLength: 1, maxLength: 128, description: 'Cached ref ID from a pruning notice (e.g. "trm_..."). Omit `id` to search across the vault (with `grep`) or list recent cached refs.' },
+                        id: { type: 'string', minLength: 1, maxLength: 128, pattern: '^trm_[0-9a-f]{32}$', description: 'Exact opencode-trim vault ref ID ("trm_<32 hex>") from an `[opencode-trim: ...]` notice or `trim_expand` discovery output. Never pass external task/job/process IDs or file paths. Omit `id` to search across the vault (with `grep`) or list recent cached refs.' },
                         tool: { type: 'string', maxLength: 64, description: 'Optional discovery/search filter when `id` is omitted: filter cached refs by tool name (e.g. "shell", "webfetch").' },
                         target: { type: 'string', maxLength: 256, description: 'Optional discovery/search filter when `id` is omitted: case-insensitive substring match on target path or command.' },
                         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Optional discovery/search limit when `id` is omitted (default 20, max 50).' },
@@ -366,6 +366,7 @@ export async function setupMemory(ctx, opts, hooks) {
                     properties: {
                         found: { type: 'boolean' },
                         id: { type: 'string' },
+                        reason: { type: 'string' },
                         mode: { type: 'string' },
                         tool: { type: ['string', 'null'] },
                         target: { type: ['string', 'null'] },

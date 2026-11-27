@@ -8,7 +8,7 @@ const tsx = readFileSync(new URL("src/tui.tsx", root), "utf8")
 const peers = ["@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"]
 
 test("package exposes ./tui and keeps existing exports", () => {
-  assert.equal(pkg.version, "0.12.5")
+  assert.equal(pkg.version, "0.12.6")
   assert.deepEqual(pkg.exports["./tui"], { types: "./dist/tui.d.ts", default: "./dist/tui.js" })
   assert.deepEqual(pkg.exports["./rpc"], { types: "./dist/stats-rpc.d.ts", default: "./dist/stats-rpc.js" })
   for (const k of [".", "./core", "./prune", "./pressure"]) {

@@ -1,8 +1,10 @@
 import { redactSecrets } from './redact.ts';
 export { redactSecrets };
+export declare const VAULT_REF_PATTERN: RegExp;
 export interface VaultLookupResult {
     found: boolean;
     id: string;
+    reason?: 'invalid_ref_format' | 'missing_or_expired';
     mode?: 'item' | 'list' | 'search';
     tool?: string | null;
     target?: string | null;

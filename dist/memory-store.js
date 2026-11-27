@@ -4,6 +4,8 @@ import { dirname } from 'node:path';
 import { SECTION_NAMES, normalizeSection, parseSections, sectionSnippet } from "./memory-sections.js";
 import { redactSecrets, stripRedactedAssignments } from "./redact.js";
 export { redactSecrets };
+export const VAULT_REF_PATTERN = /^trm_[0-9a-f]{32}$/;
+const VAULT_REF_PREFIX_PATTERN = /^trm_[A-Za-z0-9_-]{1,124}$/;
 function atomsDisjoint(a, b, caseSensitive) {
     if (a === 'any' || b === 'any')
         return false;
@@ -1278,7 +1280,20 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
                 throw new Error('store closed');
             const id = typeof refId === 'string' ? refId.trim().slice(0, 128) : '';
             if (typeof vaultProject !== 'string' || !vaultProject || !id) {
-                return { found: false, id, text: `[opencode-trim: omitted tool output unavailable — invalid or missing ref "${id}".]` };
+                return {
+                    found: false,
+                    id,
+                    reason: 'invalid_ref_format',
+                    text: `[opencode-trim: invalid vault ref "${id}" — expected an opencode-trim vault ref ("trm_<32 hex>").]`,
+                };
+            }
+            if (!VAULT_REF_PREFIX_PATTERN.test(id)) {
+                return {
+                    found: false,
+                    id,
+                    reason: 'invalid_ref_format',
+                    text: `[opencode-trim: invalid vault ref "${id}" — trim_expand only accepts "trm_<32 hex>" refs emitted by opencode-trim notices. If "${id}" is an external background task/job/process ID or file path, use that tool's own status/read tool instead; to search cached vault outputs, call trim_expand without \`id\` using \`grep\`, \`target\`, or empty args to list refs.]`,
+                };
             }
             const rawGrep = typeof grep === 'string' && grep.trim() ? grep.trim() : null;
             const rx = rawGrep && regex === true ? compileSafeGrepRegex(rawGrep, caseSensitive === true) : null;
@@ -1289,6 +1304,7 @@ export function openMemoryStore({ dbPath, retentionDays = 90, maxResults, maxSni
                 return {
                     found: false,
                     id,
+                    reason: 'missing_or_expired',
                     text: `[opencode-trim: omitted tool output unavailable — cached original for ref "${id}" expired or was cleared. Rerun the source tool to reproduce it.]`,
                 };
             }

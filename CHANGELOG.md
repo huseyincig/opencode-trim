@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.6 — 2026-11-27
+
+- **Strict `trim_expand` Vault Ref Contract & Self-Correcting Error Diagnostics (`src/memory.ts`, `src/memory-store.ts`, `src/prune.ts`)**:
+  - **Root Cause:** `trim_expand` declared `id` without a JSON Schema `pattern`, included `"bash"` in its description examples, and `getVault()` returned the same `"expired or was cleared. Rerun the source tool"` message for any non-matching string — allowing models to pass external background task/job/process IDs or file paths to `trim_expand` and misinterpret the failure as cache expiration.
+  - **Schema & Tool Guidance (`src/memory.ts`):** Added `pattern: "^trm_[0-9a-f]{32}$"` to `trim_expand.input.properties.id`, tied the tool and `id` descriptions strictly to `trm_<32 hex>` refs emitted by `[opencode-trim: ...]` notices or `trim_expand({})` discovery, explicitly forbade external background task/job/process IDs and live source files, and declared `reason: { type: "string" }` on `trim_expand.output.properties` to satisfy OpenCode V2 `ValueSchema` output validation.
+  - **Format vs Expiry Distinction (`src/memory-store.ts`):** Exported `VAULT_REF_PATTERN`, added `reason?: "invalid_ref_format" | "missing_or_expired"` to `VaultLookupResult`, and fail-closed on non-`trm_` IDs before querying SQLite — returning `reason: "invalid_ref_format"` with actionable guidance to use the external tool's own status/read tool or call `trim_expand` without `id` (`grep`/`target`/list mode), reserving `"expired or was cleared"` (`reason: "missing_or_expired"`) strictly for absent valid-prefix vault refs.
+  - **Compact Call-Syntax Stub (`src/prune.ts`):** Updated `recoverableNotice()` from `; use trim_expand.]` to `; trim_expand({id}).]` while keeping the `< 250`-char compactness budget and all security/redaction contract clauses intact.
+- **Verification:** **`594 / 594`** tests passing across 33 suites (`npm run check` — strict `tsc --noEmit`, `dist/` build, 96-file syntax check, new `test/vault-ref-contract.test.ts` TDD regression suite).
+
 ## 0.12.5 — 2026-11-26
 
 - **Accurate Compaction-Before Telemetry (`src/memory.ts`)**:
